@@ -1,5 +1,6 @@
 import { ICON_BASE64 } from '../generated/icons';
 import { PROFILE_URL, type IconState, type Post, type RaccoonState, type RuntimeNotice } from '../domain';
+import { quoteSwiftBarPluginPath } from './plugin-path';
 
 const DEFAULT_WRAP_WIDTH = 72;
 const DEFAULT_MINIMUM_POSTS = 5;
@@ -57,7 +58,7 @@ export function renderSwiftBarMenu(options: {
 }): string {
   const { state, pluginPath, notice, locale = 'en-US', timeZone } = options;
   const icon = chooseIconState(state);
-  const quotedPluginPath = quoteSwiftBarParam(pluginPath);
+  const quotedPluginPath = quoteSwiftBarPluginPath(pluginPath);
   const resolvedTimeZone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const unreadIds = new Set(state.unreadIds);
   const renderedPostRows = selectMenuPosts(state).flatMap((post) => renderPostRows(post, unreadIds.has(post.id), locale, resolvedTimeZone));
@@ -73,15 +74,6 @@ export function renderSwiftBarMenu(options: {
     renderStatus(state, notice ?? null),
   ];
   return lines.join('\n');
-}
-
-function quoteSwiftBarParam(value: string): string {
-  if (!value.startsWith('/') || value.endsWith('\\') || /[\r\n|\u0000-\u001F\u007F-\u009F\u2028\u2029]/.test(value)) {
-    throw new Error('Plugin path must be a safe absolute path');
-  }
-  if (!value.includes("'")) return `'${value}'`;
-  if (!value.includes('"')) return `"${value}"`;
-  throw new Error('Plugin path cannot contain both quote delimiters');
 }
 
 function renderPostRows(post: Post, unread: boolean, locale: string, timeZone: string): string[] {
