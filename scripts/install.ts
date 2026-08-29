@@ -40,11 +40,17 @@ export async function installPlugin(options: {
   const installedPath = join(options.pluginDirectory, ARTIFACT_NAME);
   const stagedArtifact = join(options.pluginDirectory, `.${ARTIFACT_NAME}.install-${crypto.randomUUID()}`);
   let renamed = false;
-  let stageOwned = false;
+  let stageOwnership: 'none' | 'pending' | 'owned' = 'none';
   try {
     await dependencies.build({ output: builtArtifact, bunPath: options.bunPath });
-    await dependencies.copyFile(builtArtifact, stagedArtifact);
-    stageOwned = true;
+    stageOwnership = 'pending';
+    try {
+      await dependencies.copyFile(builtArtifact, stagedArtifact);
+      stageOwnership = 'owned';
+    } catch (error) {
+      if (errorCode(error) === 'EEXIST') stageOwnership = 'none';
+      throw error;
+    }
     await dependencies.chmod(stagedArtifact, 0o755);
     await dependencies.rename(stagedArtifact, installedPath);
     renamed = true;
@@ -52,9 +58,14 @@ export async function installPlugin(options: {
   } catch {
     throw new Error('Plugin installation failed');
   } finally {
-    if (stageOwned && !renamed) await dependencies.removeTempDirectory(stagedArtifact).catch(() => undefined);
+    if (stageOwnership !== 'none' && !renamed) await dependencies.removeTempDirectory(stagedArtifact).catch(() => undefined);
     await dependencies.removeTempDirectory(temporaryDirectory).catch(() => undefined);
   }
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+  return typeof error.code === 'string' ? error.code : undefined;
 }
 
 function validateInstallInputs(options: { pluginDirectory: string; bunPath: string }, dependencies: InstallDependencies): void {
@@ -136,27 +147,36 @@ export type InstallCliIo = {
 export async function runInstallCli(argv: readonly string[], io: InstallCliIo): Promise<void> {
   const explicitPluginDirectory = readPluginDirectoryArgument(argv);
   let pluginDirectory: string | null = explicitPluginDirectory;
-  if (pluginDirectory === null && argv.length === 0 && io.stdinIsTTY && io.stdoutIsTTY) {
-    pluginDirectory = await (io.prompt ?? promptForPluginDirectory)();
-  }
-  if (
-    pluginDirectory === null ||
-    pluginDirectory.trim() === '' ||
-    !isAbsolute(pluginDirectory) ||
-    hasUnsafeControl(pluginDirectory)
-  ) {
-    writeUsage(io);
-    return;
-  }
   try {
+    if (pluginDirectory === null && argv.length === 0 && io.stdinIsTTY && io.stdoutIsTTY) {
+      try {
+        pluginDirectory = await (io.prompt ?? promptForPluginDirectory)();
+      } catch {
+        throw PROMPT_FAILURE;
+      }
+    }
+    if (
+      pluginDirectory === null ||
+      pluginDirectory.trim() === '' ||
+      !isAbsolute(pluginDirectory) ||
+      hasUnsafeControl(pluginDirectory)
+    ) {
+      writeUsage(io);
+      return;
+    }
     const result = await (io.install ?? installPlugin)({ pluginDirectory, bunPath: io.bunPath ?? process.execPath });
     io.stdout.write(`Installed: ${printableOneLine(result.installedPath)}\nIn SwiftBar, choose Refresh All.\n`);
     io.process.exitCode = 0;
   } catch (error) {
-    io.stderr.write(`${printableOneLine(error instanceof Error ? error.message : 'Plugin installation failed')}\n`);
+    const diagnostic = error === PROMPT_FAILURE
+      ? 'Plugin directory prompt failed'
+      : printableOneLine(error instanceof Error ? error.message : 'Plugin installation failed');
+    io.stderr.write(`${diagnostic}\n`);
     io.process.exitCode = 1;
   }
 }
+
+const PROMPT_FAILURE = Symbol('prompt failure');
 
 function readPluginDirectoryArgument(argv: readonly string[]): string | null {
   if (argv.length === 2 && argv[0] === '--plugin-dir') return argv[1] ?? null;

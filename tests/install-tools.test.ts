@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { copyArtifactExclusively, isCurrentUserExecutableFile, type InstallDependencies, installPlugin, runInstallCli } from '../scripts/install';
@@ -95,15 +95,14 @@ test('install keeps regular and symlink staging collisions unchanged before excl
     recordHarnessOperation(regular, 'copyFile', source, destination);
     regularCollision = destination;
     await writeFile(destination, 'regular collision');
-    await expect(copyArtifactExclusively(source, destination)).rejects.toMatchObject({ code: 'EEXIST' });
-    throw new Error('collision');
+    await copyArtifactExclusively(source, destination);
   };
   await expect(installPlugin({ pluginDirectory: regular.pluginDirectory, bunPath: regular.bunPath, dependencies: regular.dependencies })).rejects.toThrow('Plugin installation failed');
   expect(await Bun.file(regularCollision).text()).toBe('regular collision');
   await assertHarnessOperationsStayInRoot(regular);
 
   const linked = await installHarness();
-  const siblingRoot = `${harnessRoot(linked)}-sibling`;
+  const siblingRoot = harnessSibling(linked);
   const sentinel = join(siblingRoot, 'sentinel');
   let symlinkCollision = '';
   await mkdir(siblingRoot);
@@ -112,8 +111,7 @@ test('install keeps regular and symlink staging collisions unchanged before excl
     recordHarnessOperation(linked, 'copyFile', source, destination);
     symlinkCollision = destination;
     await symlink(sentinel, destination);
-    await expect(copyArtifactExclusively(source, destination)).rejects.toMatchObject({ code: 'EEXIST' });
-    throw new Error('collision');
+    await copyArtifactExclusively(source, destination);
   };
   await expect(installPlugin({ pluginDirectory: linked.pluginDirectory, bunPath: linked.bunPath, dependencies: linked.dependencies })).rejects.toThrow('Plugin installation failed');
   expect((await lstat(symlinkCollision)).isSymbolicLink()).toBe(true);
@@ -121,10 +119,25 @@ test('install keeps regular and symlink staging collisions unchanged before excl
   await assertHarnessOperationsStayInRoot(linked);
 });
 
+test('install removes an owned partial same-directory stage after a copy failure', async () => {
+  const harness = await installHarness();
+  let partialStage = '';
+  harness.dependencies.copyFile = async (source, destination) => {
+    recordHarnessOperation(harness, 'copyFile', source, destination);
+    partialStage = destination;
+    await copyFile(source, destination);
+    throw new Error('partial copy failure');
+  };
+  await expect(installPlugin({ pluginDirectory: harness.pluginDirectory, bunPath: harness.bunPath, dependencies: harness.dependencies })).rejects.toThrow('Plugin installation failed');
+  expect(await Bun.file(partialStage).exists()).toBe(false);
+  expect(harnessOperations(harness).some(({ operation, paths }) => operation === 'removeTempDirectory' && paths[0] === partialStage)).toBe(true);
+  await assertHarnessOperationsStayInRoot(harness);
+});
+
 test('install records only contained cleanup and preserves an adjacent sentinel after each failure boundary', async () => {
   for (const failure of ['build', 'copy', 'chmod', 'rename'] as const) {
     const harness = await installHarness({ failure });
-    const siblingRoot = `${harnessRoot(harness)}-sibling`;
+    const siblingRoot = harnessSibling(harness);
     const sentinel = join(siblingRoot, 'sentinel');
     await mkdir(siblingRoot);
     await writeFile(sentinel, `preserve ${failure}`);
@@ -212,6 +225,19 @@ test('install CLI uses explicit arguments, prompts only on both TTYs, and reject
   expect(outputNotTty.io.process.exitCode).toBe(64);
 });
 
+test('install CLI contains a rejecting TTY prompt without raw diagnostics', async () => {
+  const writer = cliWriter();
+  await runInstallCli([], {
+    ...writer.io,
+    install: (async () => { throw new Error('installer must not run'); }) as typeof installPlugin,
+    bunPath: '/tmp/bun', stdinIsTTY: true, stdoutIsTTY: true,
+    prompt: async () => { throw new Error('prompt failed\n\u001b[2J'); },
+  });
+  expect(writer.stdout).toBe('');
+  expect(writer.stderr).toBe('Plugin directory prompt failed\n');
+  expect(writer.io.process.exitCode).toBe(1);
+});
+
 test('CLI output escapes dynamic paths and newest IDs into one printable line', async () => {
   const installWriter = cliWriter();
   const unsafe = '/tmp/installed\n\u001b[2J\u0085';
@@ -259,7 +285,7 @@ test('uninstall removes only the exact regular artifact and retains state', asyn
   expect(await Bun.file(sibling).text()).toBe('keep');
   expect(await Bun.file(harness.stateFile).text()).toBe(before);
   expect(operations).toEqual([target, target]);
-  expect(operations.every((path) => path.startsWith(harnessRoot(harness)))).toBe(true);
+  expect(operations.every((path) => isContainedBy(harnessRoot(harness), path))).toBe(true);
 });
 
 test('uninstall rejects unconfirmed, wrong, missing, symlink, and nonregular targets without unlinking', async () => {
@@ -286,20 +312,21 @@ test('uninstall rejects unconfirmed, wrong, missing, symlink, and nonregular tar
   expect(await Bun.file(target).text()).toBe('artifact');
 });
 
-test('fresh child imports have no stdout, stderr, exit failure, or filesystem effects', async () => {
-  const harness = await installHarness();
+test('fresh child imports are fetch-fail-closed and do not add files to their actual runtime trees', async () => {
   const childRoot = await mkdtemp(join(tmpdir(), 'tibo-raccoon-import-child-'));
   harnessRoots.push(childRoot);
-  const before = await readdir(harnessRoot(harness), { recursive: true });
-  for (const modulePath of ['../scripts/install.ts', '../scripts/uninstall.ts', '../scripts/live-check.ts']) {
-    const child = Bun.spawn([process.execPath, '-e', `await import(${JSON.stringify(pathToFileURL(join(process.cwd(), modulePath.replace('../', ''))).href)});`], {
-      env: { HOME: join(childRoot, 'home'), TMPDIR: childRoot }, stdout: 'pipe', stderr: 'pipe',
-    });
-    expect(await exitWithin(child, 2_000)).toBe(0);
-    expect(await new Response(child.stdout).text()).toBe('');
-    expect(await new Response(child.stderr).text()).toBe('');
+  const childHome = join(childRoot, 'home');
+  const childTmp = join(childRoot, 'tmp');
+  const childCache = join(childRoot, 'cache');
+  await Promise.all([mkdir(childHome), mkdir(childTmp), mkdir(childCache)]);
+  const environment = { HOME: childHome, TMPDIR: childTmp, BUN_INSTALL_CACHE_DIR: childCache };
+  const modulePaths = ['../scripts/install.ts', '../scripts/uninstall.ts', '../scripts/live-check.ts'];
+  for (const modulePath of modulePaths) await runFreshGuardedImport(modulePath, environment);
+  const baseline = await snapshotRuntimeTrees(childHome, childTmp, childCache);
+  for (const modulePath of modulePaths) {
+    await runFreshGuardedImport(modulePath, environment);
+    expect(await snapshotRuntimeTrees(childHome, childTmp, childCache)).toEqual(baseline);
   }
-  expect(await readdir(harnessRoot(harness), { recursive: true })).toEqual(before);
 });
 
 async function installHarness(options: {
@@ -307,8 +334,9 @@ async function installHarness(options: {
   rename?: InstallDependencies['rename'];
   failure?: 'build' | 'copy' | 'chmod' | 'rename';
 } = {}): Promise<InstallHarness> {
-  const root = await mkdtemp(join(tmpdir(), 'tibo-raccoon-install-'));
-  harnessRoots.push(root);
+  const parent = await mkdtemp(join(tmpdir(), 'tibo-raccoon-install-parent-'));
+  const root = join(parent, 'harness');
+  harnessRoots.push(parent);
   const pluginDirectory = join(root, options.pluginDirectoryName ?? 'plugins');
   const stateDirectory = join(root, 'state');
   const stateFile = join(stateDirectory, 'state.json');
@@ -346,6 +374,10 @@ async function installHarness(options: {
 
 function harnessRoot(harness: InstallHarness): string {
   return (harness.dependencies as InstallDependencies & { __root: string }).__root;
+}
+
+function harnessSibling(harness: InstallHarness): string {
+  return join(dirname(harnessRoot(harness)), 'sentinel-sibling');
 }
 
 async function assertHarnessOperationsStayInRoot(harness: InstallHarness): Promise<void> {
@@ -391,6 +423,27 @@ async function exitWithin(child: ReturnType<typeof Bun.spawn>, timeoutMs: number
   }
 }
 
+async function runFreshGuardedImport(modulePath: string, environment: Record<string, string>): Promise<void> {
+  const moduleUrl = pathToFileURL(join(process.cwd(), modulePath.replace('../', ''))).href;
+  const source = [
+    'let fetchCalls = 0;',
+    'globalThis.fetch = () => { fetchCalls += 1; throw new Error("fetch disabled by import test"); };',
+    `await import(${JSON.stringify(moduleUrl)});`,
+    'await new Promise((resolve) => setTimeout(resolve, 20));',
+    'if (fetchCalls !== 0) throw new Error("import invoked fetch");',
+  ].join(' ');
+  const child = Bun.spawn([process.execPath, '-e', source], { env: environment, stdout: 'pipe', stderr: 'pipe' });
+  expect(await exitWithin(child, 2_000)).toBe(0);
+  expect(await new Response(child.stdout).text()).toBe('');
+  expect(await new Response(child.stderr).text()).toBe('');
+}
+
+async function snapshotRuntimeTrees(...directories: string[]): Promise<string[][]> {
+  return Promise.all(directories.map(async (directory) => (await readdir(directory, { recursive: true })).sort()));
+}
+
 afterEach(async () => {
-  await Promise.all(harnessRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  const roots = harnessRoots.splice(0);
+  await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map(async (root) => expect(await Bun.file(root).exists()).toBe(false)));
 });
