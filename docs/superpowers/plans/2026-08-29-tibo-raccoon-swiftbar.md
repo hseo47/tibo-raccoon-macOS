@@ -20,7 +20,7 @@
 - Network access is fixed HTTPS GET traffic to `api.dayclaw.com`; redirects, oversized payloads, credentials, analytics, media downloads, and X/OpenAI authentication are forbidden.
 - Only validated HTTPS URLs on `x.com`, `www.x.com`, `twitter.com`, or `www.twitter.com` become clickable post links.
 - The menu-bar header contains only the raccoon image. Dropdown count and post content remain in the menu.
-- Icon precedence is `unread > offline > calm`; unread uses outlined ember-and-yellow flame eyes plus the oxide-red corner frame, calm uses relaxed eyes, and offline uses closed eyes.
+- Icon precedence is `unread > offline > calm`; unread uses outlined ember-and-yellow flame eyes plus the oxide-red corner frame, calm uses relaxed eyes plus the viewer-right mint-celadon nose drip, and offline uses closed eyes without the drip.
 - Render every unread post, then enough recent read posts to show at least five posts. Never auto-clear or hide unread posts.
 - The installed artifact is one executable Bun script with an absolute Bun shebang, `runInBash=false`, and embedded light/dark images.
 - The installer checks prerequisites but never installs Bun, SwiftBar, Homebrew, login items, launch agents, or dependencies.
@@ -320,7 +320,7 @@ git commit -m "feat: add bounded Dayclaw feed client"
 
 - [ ] **Step 1: Write failing pixel and PNG-structure tests**
 
-Test exact dimensions, transparent corners, round-cheek silhouette spans, calm/offline eye coordinates, unread flame outline/outer/core coordinates, flame and oxide pixels only in unread, all palette values in both appearances, layer precedence, horizontal flame mirroring, and deterministic PNG chunks.
+Test exact dimensions, transparent corners, round-cheek silhouette spans, calm/offline eye coordinates, the calm-only viewer-right drip, unread flame outline/outer/core coordinates, flame and oxide pixels only in unread, all palette values in both appearances, layer precedence, horizontal flame mirroring, and deterministic PNG chunks.
 
 ```ts
 import { expect, test } from 'bun:test';
@@ -335,6 +335,16 @@ test('unread uses the approved outlined fire eyes and oxide frame', () => {
   expect(pixel(rgba, 39, 26, 7)).toEqual(pixel(rgba, 39, 12, 7));
   expect(pixel(rgba, 39, 1, 5)).toEqual([0x9a, 0x4d, 0x49, 0xff]);
   expect(pixel(rgba, 39, 0, 0)).toEqual([0, 0, 0, 0]);
+});
+
+test('calm alone has the approved viewer-right nose drip', () => {
+  const calm = renderRaccoonRgba('calm', 'light');
+  const unread = renderRaccoonRgba('unread', 'light');
+  const offline = renderRaccoonRgba('offline', 'light');
+  expect(pixel(calm, 39, 21, 21)).toEqual([0x8f, 0xcb, 0xb7, 0xff]);
+  expect(pixel(calm, 39, 22, 24)).toEqual([0x8f, 0xcb, 0xb7, 0xff]);
+  expect(pixel(unread, 39, 21, 21)).not.toEqual([0x8f, 0xcb, 0xb7, 0xff]);
+  expect(pixel(offline, 39, 21, 21)).not.toEqual([0x8f, 0xcb, 0xb7, 0xff]);
 });
 
 test('PNG encoding is byte-stable and contains only required chunks', () => {
@@ -359,7 +369,7 @@ Expected: FAIL because the artwork modules do not exist.
 Represent filled rows as inclusive spans so there is no SVG parser or antialiasing:
 
 ```ts
-type Role = 'fur' | 'mask' | 'face' | 'eye' | 'flameOuter' | 'flameCore' | 'oxide';
+type Role = 'fur' | 'mask' | 'face' | 'eye' | 'snot' | 'flameOuter' | 'flameCore' | 'oxide';
 type Span = readonly [y: number, x0: number, x1: number, role: Role];
 
 export const WIDTH = 39;
@@ -368,11 +378,11 @@ export const HEIGHT = 29;
 export const PALETTES = {
   light: {
     fur: '#8a9299', mask: '#34393e', face: '#d8dbde', eye: '#17191b',
-    flameOuter: '#d64b2a', flameCore: '#ffc247', oxide: '#9a4d49',
+    snot: '#8fcbb7', flameOuter: '#d64b2a', flameCore: '#ffc247', oxide: '#9a4d49',
   },
   dark: {
     fur: '#aab1b7', mask: '#2b3035', face: '#d7dadc', eye: '#151719',
-    flameOuter: '#ff6b47', flameCore: '#ffd166', oxide: '#cc7a74',
+    snot: '#b5e2d1', flameOuter: '#ff6b47', flameCore: '#ffd166', oxide: '#cc7a74',
   },
 } as const;
 
@@ -401,6 +411,9 @@ const NOSE: readonly Span[] = [...rows(18, 20, 17, 21, 'eye')];
 const CALM: readonly Span[] = [
   ...rows(13, 14, 10, 12, 'face'), ...rows(13, 14, 26, 28, 'face'),
   [14, 11, 12, 'eye'], [14, 26, 27, 'eye'],
+];
+const CALM_DRIP: readonly Span[] = [
+  ...rows(21, 23, 21, 21, 'snot'), [24, 21, 22, 'snot'],
 ];
 const LEFT_FLAME_OUTLINE: readonly Span[] = [
   [7, 12, 12, 'eye'], [8, 11, 13, 'eye'], [9, 10, 13, 'eye'],
@@ -432,7 +445,7 @@ const OFFLINE: readonly Span[] = [
 ];
 ```
 
-Paint transparent RGBA first, then `SHARED`, the state-specific face/eyes or ordered flame outline/outer/core spans, `NOSE`, and finally the unread oxide spans so the layer order matches the approved geometry. Implement PNG signature, `IHDR`, one `IDAT`, and `IEND`; each scanline starts with filter byte `0`, the zlib stream uses stored DEFLATE blocks, and CRC-32/Adler-32 are calculated in code.
+Paint transparent RGBA first, then `SHARED`, the state-specific face/eyes or ordered flame outline/outer/core spans, `NOSE`, the calm-only drip, and finally the unread oxide spans so the layer order matches the approved geometry. Implement PNG signature, `IHDR`, one `IDAT`, and `IEND`; each scanline starts with filter byte `0`, the zlib stream uses stored DEFLATE blocks, and CRC-32/Adler-32 are calculated in code.
 
 - [ ] **Step 4: Generate and pin canonical icon bytes**
 
@@ -1178,7 +1191,7 @@ git commit -m "docs: add explicit SwiftBar install workflow"
 
 Drive the real state model/store, poller, renderer, and CLI together while injecting only the clock and feed. Assert this sequence:
 
-1. first response with five historical posts yields calm and `0 unread`;
+1. first response with five historical posts yields the calm image with its viewer-right drip and `0 unread`;
 2. a sixth text post yields the flame-eyed unread image, exact unread icon hash, exact safe text, and `1 unread`;
 3. normal refresh preserves unread;
 4. `mark-read` returns empty stdout and the next render is calm;

@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: Approved by the user on 2026-08-29; unread flame-eye amendment approved on 2026-08-29
+Status: Approved by the user on 2026-08-29; unread flame-eye amendment approved on 2026-08-29; calm-state drip amendment approved on 2026-08-30
 
 ## Summary
 
@@ -49,7 +49,7 @@ SwiftBar's documented standard-plugin protocol is the integration contract: an e
 
 The menu bar contains only the raccoon image: no text, count, envelope, or badge.
 
-1. **Calm** — a chubby, round-cheeked pixel raccoon with relaxed, slightly half-open eyes. This means there are no unread posts and the feed is not in a sustained failure state.
+1. **Calm** — a chubby, round-cheeked pixel raccoon with relaxed, slightly half-open eyes and a tiny mint-celadon drip hanging from the viewer-right edge of its nose. This means there are no unread posts and the feed is not in a sustained failure state.
 2. **Unread** — the same raccoon with compact fire-lit eyes: a charcoal pixel outline, ember-red/orange body, and warm yellow core rise slightly above each eye mask. Four fine, muted oxide-red corner marks still frame the raccoon. The flames provide the playful urgency; the restrained frame keeps the state legible without becoming a conventional notification badge.
 3. **Offline** — the calm raccoon with fully closed eyes. This appears after three consecutive failed feed attempts when there are no unread cached posts.
 
@@ -67,6 +67,7 @@ The temporary browser mockups are not repository assets. To preserve the approve
 | Mask/ears | `#34393e` | `#2b3035` |
 | Face highlight | `#d8dbde` | `#d7dadc` |
 | Eyes/nose | `#17191b` | `#151719` |
+| Calm drip | `#8fcbb7` | `#b5e2d1` |
 | Flame outer | `#d64b2a` | `#ff6b47` |
 | Flame core | `#ffc247` | `#ffd166` |
 | Unread frame | `#9a4d49` | `#cc7a74` |
@@ -85,6 +86,7 @@ The state-specific eyes and frame are:
 ```text
 calm face:    M10 13h3v2h-3z M26 13h3v2h-3z
 calm eyes:    M11 14h2v1h-2z M26 14h2v1h-2z
+calm drip:    M21 21h1v3h-1z M21 24h2v1h-2z
 offline face: M10 13h3v2h-3z M26 13h3v2h-3z
 offline eyes: M10 14h3v1h-3z M26 14h3v1h-3z
 oxide frame:  M1 5h5v1H2v4H1z M33 5h5v5h-1V6h-4z M1 22h1v4h4v1H1z M37 22h1v5h-5v-1h4z
@@ -100,9 +102,9 @@ outer:   y8:12-12, y9:11-12, y10:11-13, y11:10-13,
 core:    y10:12-12, y11:11-12, y12:11-12, y13:11-11
 ```
 
-The outline uses the eyes/nose color, followed by flame outer and flame core. Calm keeps the shorter, lower pupils approved in the visual review. Offline keeps the same face and cheeks but turns each eye into a horizontal closed line. No envelope, circular dot, numeric badge, filled red field, or animation is part of any state.
+The outline uses the eyes/nose color, followed by flame outer and flame core. Calm keeps the shorter, lower pupils approved in the visual review and alone receives the solid-color drip: one pixel wide for three rows below the viewer-right nose edge, ending in a two-pixel foot. Unread and offline never receive the drip. Offline keeps the same face and cheeks but turns each eye into a horizontal closed line. No envelope, circular dot, numeric badge, filled red field, or animation is part of any state.
 
-Each canonical image is exactly 39×29 physical pixels with a transparent background. Rectangles are filled on integer coordinates in this order: ears, silhouette, masks, state-specific face/eye or flame outline, flame outer, flame core, eyes/nose, then unread frame. No antialiasing, resampling, color profiles, or semitransparent pixels are allowed. The PNG encoding is deterministic: 8-bit RGBA, non-interlaced, filter type 0 on every row, one `IDAT` chunk using stored (uncompressed) DEFLATE blocks, and only `IHDR`, `IDAT`, and `IEND` chunks. The six canonical PNGs are checked in, and both the asset generator and bundled Base64 must reproduce their SHA-256 hashes byte for byte.
+Each canonical image is exactly 39×29 physical pixels with a transparent background. Rectangles are filled on integer coordinates in this order: ears, silhouette, masks, state-specific face/eye or flame outline, flame outer, flame core, eyes/nose, the calm drip, then unread frame. No antialiasing, resampling, color profiles, or semitransparent pixels are allowed. The PNG encoding is deterministic: 8-bit RGBA, non-interlaced, filter type 0 on every row, one `IDAT` chunk using stored (uncompressed) DEFLATE blocks, and only `IHDR`, `IDAT`, and `IEND` chunks. The six canonical PNGs are checked in, and both the asset generator and bundled Base64 must reproduce their SHA-256 hashes byte for byte.
 
 ### Dropdown
 
