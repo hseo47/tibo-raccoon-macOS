@@ -8,6 +8,8 @@
     "typecheck": "tsc --noEmit",
     "generate:icons": "bun run scripts/generate-icons.ts",
     "build": "bun run scripts/build.ts",
+    "install:plugin": "bun run scripts/install.ts",
+    "uninstall:plugin": "bun run scripts/uninstall.ts",
     "live-check": "bun run scripts/live-check.ts",
     "check": "bun run typecheck && bun test && bun run build"
   },
