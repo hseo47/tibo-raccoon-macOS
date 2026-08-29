@@ -1,9 +1,17 @@
-import { chmod, mkdir, open, rename, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod, mkdir, open, rename, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { ICON_BASE64, ICON_SHA256 } from '../src/generated/icons';
 
 const ARTIFACT_NAME = 'tibo-raccoon.2m.js';
+const ALLOWED_RUNTIME_IMPORTS = new Set([
+  'crypto',
+  'fs',
+  'fs/promises',
+  'os',
+  'path',
+]);
 const metadataFor = (bunPath: string): string => [
   `#!${bunPath}`,
   '// <xbar.title>Tibo Raccoon</xbar.title>',
@@ -61,8 +69,25 @@ async function validateBunPath(bunPath: string): Promise<void> {
   try {
     const details = await stat(bunPath);
     if (!details.isFile() || (details.mode & 0o111) === 0) throw new Error('not executable');
+    await access(bunPath, constants.X_OK);
   } catch {
     throw new Error('Bun path must be an absolute executable path without whitespace');
+  }
+}
+
+export function extractRuntimeImportSpecifiers(source: string): string[] {
+  const specifiers = new Set<string>();
+  const staticImport = /\bimport(?!\s*\()\s*(?:[^'"`]*?from\s*)?(['"])([^'"`]+)\1/g;
+  const dynamicImport = /\bimport\s*\(\s*(['"])([^'"`]+)\1\s*\)/g;
+  for (const pattern of [staticImport, dynamicImport]) {
+    for (const match of source.matchAll(pattern)) specifiers.add(match[2]!);
+  }
+  return [...specifiers].sort();
+}
+
+export function assertAllowedRuntimeImports(source: string): void {
+  if (extractRuntimeImportSpecifiers(source).some((specifier) => !ALLOWED_RUNTIME_IMPORTS.has(specifier))) {
+    throw new Error('Plugin artifact verification failed');
   }
 }
 
@@ -103,11 +128,11 @@ async function verifyArtifact(output: string, bunPath: string): Promise<void> {
     !source.startsWith(`#!${bunPath}\n`) ||
     !source.startsWith(metadataFor(bunPath)) ||
     source.includes('sourceMappingURL') ||
-    source.includes('assets/icons') ||
-    source.match(/(?:from\s*|import\s*\()['\"](?:\.{1,2}\/|src\/|assets\/|tibo-raccoon-swiftbar)/) !== null
+    source.includes('assets/icons')
   ) {
     throw new Error('Plugin artifact verification failed');
   }
+  assertAllowedRuntimeImports(source);
   for (const state of ['calm', 'unread', 'offline'] as const) {
     for (const appearance of ['light', 'dark'] as const) {
       if (!source.includes(ICON_BASE64[state][appearance]) || !source.includes(ICON_SHA256[state][appearance])) {
