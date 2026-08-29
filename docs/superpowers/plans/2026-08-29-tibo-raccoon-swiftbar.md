@@ -20,7 +20,7 @@
 - Network access is fixed HTTPS GET traffic to `api.dayclaw.com`; redirects, oversized payloads, credentials, analytics, media downloads, and X/OpenAI authentication are forbidden.
 - Only validated HTTPS URLs on `x.com`, `www.x.com`, `twitter.com`, or `www.twitter.com` become clickable post links.
 - The menu-bar header contains only the raccoon image. Dropdown count and post content remain in the menu.
-- Icon precedence is `unread > offline > calm`; unread uses open square eyes plus the oxide-red corner frame, calm uses relaxed eyes, and offline uses closed eyes.
+- Icon precedence is `unread > offline > calm`; unread uses outlined ember-and-yellow flame eyes plus the oxide-red corner frame, calm uses relaxed eyes, and offline uses closed eyes.
 - Render every unread post, then enough recent read posts to show at least five posts. Never auto-clear or hide unread posts.
 - The installed artifact is one executable Bun script with an absolute Bun shebang, `runInBash=false`, and embedded light/dark images.
 - The installer checks prerequisites but never installs Bun, SwiftBar, Homebrew, login items, launch agents, or dependencies.
@@ -320,16 +320,19 @@ git commit -m "feat: add bounded Dayclaw feed client"
 
 - [ ] **Step 1: Write failing pixel and PNG-structure tests**
 
-Test exact dimensions, transparent corners, round-cheek silhouette spans, eye coordinates for all states, oxide pixels only in unread, all palette values in both appearances, layer precedence, and deterministic PNG chunks.
+Test exact dimensions, transparent corners, round-cheek silhouette spans, calm/offline eye coordinates, unread flame outline/outer/core coordinates, flame and oxide pixels only in unread, all palette values in both appearances, layer precedence, horizontal flame mirroring, and deterministic PNG chunks.
 
 ```ts
 import { expect, test } from 'bun:test';
 import { renderRaccoonRgba } from '../src/artwork/grid';
 import { encodeDeterministicPng } from '../src/artwork/png';
 
-test('unread keeps open eyes and only the approved oxide frame', () => {
+test('unread uses the approved outlined fire eyes and oxide frame', () => {
   const rgba = renderRaccoonRgba('unread', 'light');
-  expect(pixel(rgba, 39, 11, 12)).toEqual([0x17, 0x19, 0x1b, 0xff]);
+  expect(pixel(rgba, 39, 12, 7)).toEqual([0x17, 0x19, 0x1b, 0xff]);
+  expect(pixel(rgba, 39, 12, 9)).toEqual([0xd6, 0x4b, 0x2a, 0xff]);
+  expect(pixel(rgba, 39, 12, 11)).toEqual([0xff, 0xc2, 0x47, 0xff]);
+  expect(pixel(rgba, 39, 26, 7)).toEqual(pixel(rgba, 39, 12, 7));
   expect(pixel(rgba, 39, 1, 5)).toEqual([0x9a, 0x4d, 0x49, 0xff]);
   expect(pixel(rgba, 39, 0, 0)).toEqual([0, 0, 0, 0]);
 });
@@ -356,19 +359,29 @@ Expected: FAIL because the artwork modules do not exist.
 Represent filled rows as inclusive spans so there is no SVG parser or antialiasing:
 
 ```ts
-type Role = 'fur' | 'mask' | 'face' | 'eye' | 'oxide';
+type Role = 'fur' | 'mask' | 'face' | 'eye' | 'flameOuter' | 'flameCore' | 'oxide';
 type Span = readonly [y: number, x0: number, x1: number, role: Role];
 
 export const WIDTH = 39;
 export const HEIGHT = 29;
 
 export const PALETTES = {
-  light: { fur: '#8a9299', mask: '#34393e', face: '#d8dbde', eye: '#17191b', oxide: '#9a4d49' },
-  dark: { fur: '#aab1b7', mask: '#2b3035', face: '#d7dadc', eye: '#151719', oxide: '#cc7a74' },
+  light: {
+    fur: '#8a9299', mask: '#34393e', face: '#d8dbde', eye: '#17191b',
+    flameOuter: '#d64b2a', flameCore: '#ffc247', oxide: '#9a4d49',
+  },
+  dark: {
+    fur: '#aab1b7', mask: '#2b3035', face: '#d7dadc', eye: '#151719',
+    flameOuter: '#ff6b47', flameCore: '#ffd166', oxide: '#cc7a74',
+  },
 } as const;
 
 function rows(y0: number, y1: number, x0: number, x1: number, role: Role): Span[] {
   return Array.from({ length: y1 - y0 + 1 }, (_, index) => [y0 + index, x0, x1, role] as const);
+}
+
+function mirrorSpans(spans: readonly Span[]): Span[] {
+  return spans.map(([y, x0, x1, role]) => [y, WIDTH - 1 - x1, WIDTH - 1 - x0, role] as const);
 }
 
 const SHARED: readonly Span[] = [
@@ -389,9 +402,25 @@ const CALM: readonly Span[] = [
   ...rows(13, 14, 10, 12, 'face'), ...rows(13, 14, 26, 28, 'face'),
   [14, 11, 12, 'eye'], [14, 26, 27, 'eye'],
 ];
+const LEFT_FLAME_OUTLINE: readonly Span[] = [
+  [7, 12, 12, 'eye'], [8, 11, 13, 'eye'], [9, 10, 13, 'eye'],
+  [10, 10, 14, 'eye'], [11, 9, 14, 'eye'], [12, 9, 14, 'eye'],
+  [13, 9, 13, 'eye'], [14, 10, 13, 'eye'], [15, 10, 12, 'eye'],
+];
+const LEFT_FLAME_OUTER: readonly Span[] = [
+  [8, 12, 12, 'flameOuter'], [9, 11, 12, 'flameOuter'],
+  [10, 11, 13, 'flameOuter'], [11, 10, 13, 'flameOuter'],
+  [12, 10, 13, 'flameOuter'], [13, 10, 12, 'flameOuter'],
+  [14, 11, 12, 'flameOuter'],
+];
+const LEFT_FLAME_CORE: readonly Span[] = [
+  [10, 12, 12, 'flameCore'], [11, 11, 12, 'flameCore'],
+  [12, 11, 12, 'flameCore'], [13, 11, 11, 'flameCore'],
+];
 const UNREAD: readonly Span[] = [
-  ...rows(12, 14, 10, 12, 'face'), ...rows(12, 14, 26, 28, 'face'),
-  ...rows(12, 13, 11, 12, 'eye'), ...rows(12, 13, 26, 27, 'eye'),
+  ...LEFT_FLAME_OUTLINE, ...mirrorSpans(LEFT_FLAME_OUTLINE),
+  ...LEFT_FLAME_OUTER, ...mirrorSpans(LEFT_FLAME_OUTER),
+  ...LEFT_FLAME_CORE, ...mirrorSpans(LEFT_FLAME_CORE),
   [5, 1, 5, 'oxide'], ...rows(6, 9, 1, 1, 'oxide'),
   [5, 33, 37, 'oxide'], ...rows(6, 9, 37, 37, 'oxide'),
   ...rows(22, 25, 1, 1, 'oxide'), [26, 1, 5, 'oxide'],
@@ -403,7 +432,7 @@ const OFFLINE: readonly Span[] = [
 ];
 ```
 
-Paint transparent RGBA first, then `SHARED`, the state-specific face/eyes, `NOSE`, and finally the unread oxide spans so the layer order matches the approved geometry. Implement PNG signature, `IHDR`, one `IDAT`, and `IEND`; each scanline starts with filter byte `0`, the zlib stream uses stored DEFLATE blocks, and CRC-32/Adler-32 are calculated in code.
+Paint transparent RGBA first, then `SHARED`, the state-specific face/eyes or ordered flame outline/outer/core spans, `NOSE`, and finally the unread oxide spans so the layer order matches the approved geometry. Implement PNG signature, `IHDR`, one `IDAT`, and `IEND`; each scanline starts with filter byte `0`, the zlib stream uses stored DEFLATE blocks, and CRC-32/Adler-32 are calculated in code.
 
 - [ ] **Step 4: Generate and pin canonical icon bytes**
 
@@ -1150,7 +1179,7 @@ git commit -m "docs: add explicit SwiftBar install workflow"
 Drive the real state model/store, poller, renderer, and CLI together while injecting only the clock and feed. Assert this sequence:
 
 1. first response with five historical posts yields calm and `0 unread`;
-2. a sixth text post yields the attentive unread image, oxide-frame hash, exact safe text, and `1 unread`;
+2. a sixth text post yields the flame-eyed unread image, exact unread icon hash, exact safe text, and `1 unread`;
 3. normal refresh preserves unread;
 4. `mark-read` returns empty stdout and the next render is calm;
 5. an empty-text seventh post yields **New media post from Tibo** and its validated link;

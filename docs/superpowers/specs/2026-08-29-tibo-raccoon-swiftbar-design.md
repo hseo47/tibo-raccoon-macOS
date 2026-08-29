@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: Approved by the user on 2026-08-29
+Status: Approved by the user on 2026-08-29; unread flame-eye amendment approved on 2026-08-29
 
 ## Summary
 
@@ -50,7 +50,7 @@ SwiftBar's documented standard-plugin protocol is the integration contract: an e
 The menu bar contains only the raccoon image: no text, count, envelope, or badge.
 
 1. **Calm** — a chubby, round-cheeked pixel raccoon with relaxed, slightly half-open eyes. This means there are no unread posts and the feed is not in a sustained failure state.
-2. **Unread** — the same raccoon with the original attentive square/open eyes. Four fine, muted oxide-red corner marks frame the raccoon. The restrained red frame communicates urgency without becoming a conventional notification badge.
+2. **Unread** — the same raccoon with compact fire-lit eyes: a charcoal pixel outline, ember-red/orange body, and warm yellow core rise slightly above each eye mask. Four fine, muted oxide-red corner marks still frame the raccoon. The flames provide the playful urgency; the restrained frame keeps the state legible without becoming a conventional notification badge.
 3. **Offline** — the calm raccoon with fully closed eyes. This appears after three consecutive failed feed attempts when there are no unread cached posts.
 
 State precedence is `unread > offline > calm`. If cached unread posts exist during an outage, the unread raccoon remains visible so the more important state is never hidden.
@@ -67,6 +67,8 @@ The temporary browser mockups are not repository assets. To preserve the approve
 | Mask/ears | `#34393e` | `#2b3035` |
 | Face highlight | `#d8dbde` | `#d7dadc` |
 | Eyes/nose | `#17191b` | `#151719` |
+| Flame outer | `#d64b2a` | `#ff6b47` |
+| Flame core | `#ffc247` | `#ffd166` |
 | Unread frame | `#9a4d49` | `#cc7a74` |
 
 The shared chubby silhouette, round cheeks, mask, and nose use this SVG-grid geometry; the asset builder rasterizes it without smoothing:
@@ -83,16 +85,24 @@ The state-specific eyes and frame are:
 ```text
 calm face:    M10 13h3v2h-3z M26 13h3v2h-3z
 calm eyes:    M11 14h2v1h-2z M26 14h2v1h-2z
-unread face:  M10 12h3v3h-3z M26 12h3v3h-3z
-unread eyes:  M11 12h2v2h-2z M26 12h2v2h-2z
 offline face: M10 13h3v2h-3z M26 13h3v2h-3z
 offline eyes: M10 14h3v1h-3z M26 14h3v1h-3z
 oxide frame:  M1 5h5v1H2v4H1z M33 5h5v5h-1V6h-4z M1 22h1v4h4v1H1z M37 22h1v5h-5v-1h4z
 ```
 
-Calm has the shorter, lower pupils approved in the visual review. Unread retains the original open square eyes and adds only the fine oxide-red corner frame. Offline keeps the same face and cheeks but turns each eye into a horizontal closed line. No envelope, circular dot, numeric badge, or filled red field is part of any state.
+The unread left flame is defined by these inclusive row spans; the right flame mirrors each span horizontally with `mirroredX = 38 - x`:
 
-Each canonical image is exactly 39×29 physical pixels with a transparent background. Rectangles are filled on integer coordinates in this order: ears, silhouette, masks, face highlights, eyes/nose, then unread frame. No antialiasing, resampling, color profiles, or semitransparent pixels are allowed. The PNG encoding is deterministic: 8-bit RGBA, non-interlaced, filter type 0 on every row, one `IDAT` chunk using stored (uncompressed) DEFLATE blocks, and only `IHDR`, `IDAT`, and `IEND` chunks. The six canonical PNGs are checked in, and both the asset generator and bundled Base64 must reproduce their SHA-256 hashes byte for byte.
+```text
+outline: y7:12-12, y8:11-13, y9:10-13, y10:10-14, y11:9-14,
+         y12:9-14, y13:9-13, y14:10-13, y15:10-12
+outer:   y8:12-12, y9:11-12, y10:11-13, y11:10-13,
+         y12:10-13, y13:10-12, y14:11-12
+core:    y10:12-12, y11:11-12, y12:11-12, y13:11-11
+```
+
+The outline uses the eyes/nose color, followed by flame outer and flame core. Calm keeps the shorter, lower pupils approved in the visual review. Offline keeps the same face and cheeks but turns each eye into a horizontal closed line. No envelope, circular dot, numeric badge, filled red field, or animation is part of any state.
+
+Each canonical image is exactly 39×29 physical pixels with a transparent background. Rectangles are filled on integer coordinates in this order: ears, silhouette, masks, state-specific face/eye or flame outline, flame outer, flame core, eyes/nose, then unread frame. No antialiasing, resampling, color profiles, or semitransparent pixels are allowed. The PNG encoding is deterministic: 8-bit RGBA, non-interlaced, filter type 0 on every row, one `IDAT` chunk using stored (uncompressed) DEFLATE blocks, and only `IHDR`, `IDAT`, and `IEND` chunks. The six canonical PNGs are checked in, and both the asset generator and bundled Base64 must reproduce their SHA-256 hashes byte for byte.
 
 ### Dropdown
 
