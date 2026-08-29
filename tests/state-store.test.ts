@@ -87,6 +87,17 @@ describe('isolated filesystem fault handling', () => {
     const recovered = await loadState(statePaths); expect(recovered).toEqual({ state: createInitialState({ recoveryPending: true }), source: 'recovered' });
     expect((await loadState(statePaths)).state.recoveryPending).toBe(true); await expect(stat(join(statePaths.directory, 'state.json.recovery'))).rejects.toThrow();
   });
+
+  test('keeps unread-first recovery when direct mutation follows failed replacement', async () => {
+    const statePaths = await paths(); const fault = await faultChild(statePaths, 'recovery-after-quarantine');
+    expect(fault).toMatchObject({ threw: true, fired: true, quarantined: true });
+    const mutated = await mutateState(statePaths, (current) => ({ ...current, knownIds: ['after-fault'] }));
+    expect(mutated.recoveryPending).toBe(true); expect(mutated.knownIds).toEqual(['after-fault']);
+    expect((await loadState(statePaths)).state.recoveryPending).toBe(true);
+    await expect(stat(join(statePaths.directory, 'state.json.recovery'))).rejects.toThrow();
+    const quarantines = (await readdir(statePaths.directory)).filter((name) => /^state\.json\.corrupt-\d{8}T\d{9}Z$/.test(name));
+    expect(await readFile(join(statePaths.directory, quarantines[0]!), 'utf8')).toBe('{broken');
+  });
 });
 
 describe('corrupt state recovery', () => {

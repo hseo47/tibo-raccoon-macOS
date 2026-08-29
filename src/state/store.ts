@@ -70,7 +70,9 @@ export async function mutateState(
     const loaded = await readState(paths);
     let current: RaccoonState;
     if (loaded.kind === 'existing') current = loaded.state;
-    else if (loaded.kind === 'missing') current = createInitialState();
+    else if (loaded.kind === 'missing') {
+      current = (await recoveryMarkerExists(paths)) ? createInitialState({ recoveryPending: true }) : createInitialState();
+    }
     else current = await recoverCorruptState(paths);
 
     let next: RaccoonState;
@@ -80,6 +82,7 @@ export async function mutateState(
       throw new StateStoreError('State update could not be saved');
     }
     await writeState(paths, next);
+    await removeRecoveryMarker(paths);
     return next;
   });
 }
