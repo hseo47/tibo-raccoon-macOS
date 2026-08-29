@@ -12,6 +12,9 @@ const FILE_MODE = 0o600;
 const LOCK_TIMEOUT_MS = 2_000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 25;
+// Bun forwards process.kill PIDs to a signed pid_t. Values outside this range
+// cannot be probed and are therefore malformed owner records.
+const MAX_PROCESS_ID = 0x7fff_ffff;
 
 export type StatePaths = {
   directory: string;
@@ -289,14 +292,7 @@ async function reclaimStaleLock(paths: StatePaths): Promise<void> {
   }
   try {
     const artifact = await inspectArtifact(paths.lockFile);
-    if (artifact.kind === 'missing') return;
-    const owner = artifact.kind === 'regular' && artifact.body !== null ? parseLockRecord(artifact.body) : null;
-    if (owner !== null) {
-      if (!recordIsStale(owner) || !ownerIsDead(owner.pid)) return;
-      await unlinkOwnedArtifact(paths.lockFile, owner);
-      return;
-    }
-    if (Date.now() - artifact.modifiedAt > LOCK_STALE_MS) await preserveAndDisplace(paths.lockFile, artifact);
+    await recoverOwnedArtifact(paths.lockFile, artifact);
   } catch {
     // The primary changed while the reclaim claim was held. A later contender retries safely.
   } finally {
@@ -312,13 +308,24 @@ async function recoverStaleReclaimClaim(paths: StatePaths): Promise<void> {
   const claim = reclaimMarkerFile(paths);
   let artifact: Awaited<ReturnType<typeof inspectArtifact>>;
   try { artifact = await inspectArtifact(claim); } catch { throw new StateStoreError('Private state storage is unavailable'); }
+  await recoverOwnedArtifact(claim, artifact);
+}
+
+async function recoverOwnedArtifact(
+  path: string,
+  artifact: Awaited<ReturnType<typeof inspectArtifact>>,
+): Promise<void> {
   if (artifact.kind === 'missing') return;
   const owner = artifact.kind === 'regular' && artifact.body !== null ? parseLockRecord(artifact.body) : null;
-  if (owner !== null) {
-    if (recordIsStale(owner) && ownerIsDead(owner.pid)) await unlinkOwnedArtifact(claim, owner);
+  if (owner === null) {
+    if (artifactIsStale(artifact)) await preserveAndDisplace(path, artifact);
     return;
   }
-  if (Date.now() - artifact.modifiedAt > LOCK_STALE_MS) await preserveAndDisplace(claim, artifact);
+  if (recordIsMateriallyFuture(owner)) {
+    if (artifactIsStale(artifact) && ownerIsDead(owner.pid)) await preserveAndDisplace(path, artifact);
+    return;
+  }
+  if (recordIsStale(owner) && ownerIsDead(owner.pid)) await unlinkOwnedArtifact(path, owner);
 }
 
 async function publishOwnerRecord(path: string, owner: LockRecord): Promise<boolean> {
@@ -387,6 +394,14 @@ function recordIsStale(owner: LockRecord): boolean {
   return Date.now() - Date.parse(owner.createdAt) > LOCK_STALE_MS;
 }
 
+function recordIsMateriallyFuture(owner: LockRecord): boolean {
+  return Date.parse(owner.createdAt) - Date.now() > LOCK_STALE_MS;
+}
+
+function artifactIsStale(artifact: Artifact): boolean {
+  return Date.now() - artifact.modifiedAt > LOCK_STALE_MS;
+}
+
 function ownerIsDead(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -407,12 +422,19 @@ function parseLockRecord(value: string): LockRecord | null {
     const candidate = parsed as Record<string, unknown>;
     const { pid, createdAt, token } = candidate;
     if (
-      typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 ||
-      typeof createdAt !== 'string' || Number.isNaN(Date.parse(createdAt)) ||
+      typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid > MAX_PROCESS_ID ||
+      typeof createdAt !== 'string' || parseCanonicalLockTimestamp(createdAt) === null ||
       typeof token !== 'string' || token.length === 0
     ) return null;
     return { pid, createdAt, token };
   } catch { return null; }
+}
+
+function parseCanonicalLockTimestamp(value: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) return null;
+  return timestamp;
 }
 
 function errorCode(error: unknown): string | undefined {

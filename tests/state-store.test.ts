@@ -31,6 +31,28 @@ async function ageLockArtifacts(directory: string): Promise<void> {
     await utimes(path, stale, stale);
   }
 }
+async function ageArtifact(path: string): Promise<void> {
+  const stale = new Date(Date.now() - 31_000);
+  await utimes(path, stale, stale);
+}
+async function expectImpossibleOwnerRecovery(
+  statePaths: Awaited<ReturnType<typeof tempStatePaths>>,
+  artifact: string,
+  body: string,
+  orphanPattern: RegExp,
+): Promise<void> {
+  await mutateState(statePaths, (current) => ({ ...current, knownIds: ['before'] }));
+  await writeFile(artifact, body, { mode: 0o600 });
+  await ageArtifact(artifact);
+
+  const recovered = await mutateState(statePaths, (current) => ({ ...current, knownIds: [...current.knownIds, 'after'] }));
+  const orphans = (await readdir(statePaths.directory)).filter((entry) => orphanPattern.test(entry));
+
+  expect(recovered.knownIds).toEqual(['after', 'before']);
+  expect((await loadState(statePaths)).state.knownIds).toEqual(['after', 'before']);
+  expect(orphans).toHaveLength(1);
+  expect(await readFile(join(statePaths.directory, orphans[0]!), 'utf8')).toBe(body);
+}
 
 afterEach(async () => { await Promise.all(pathsToClean.splice(0).map(cleanupTempState)); });
 
@@ -286,6 +308,51 @@ describe('owner-aware locking', () => {
     expect(recovered.knownIds).toEqual(['legacy-claim-recovered']);
     expect(orphan).toBeDefined();
     expect(await readFile(join(statePaths.directory, orphan!), 'utf8')).toBe('legacy-reclaim-token');
+  });
+  test('recovers and preserves an aged primary lock with a far-future timestamp', async () => {
+    const statePaths = await paths();
+    const body = lockRecord(999_999, '9999-12-31T23:59:59.999Z', 'future-primary');
+    await expectImpossibleOwnerRecovery(statePaths, statePaths.lockFile, body, /^state\.lock\.orphan-[0-9a-f-]{36}$/i);
+  });
+  test('recovers and preserves an aged reclaim claim with a far-future timestamp', async () => {
+    const statePaths = await paths();
+    const claim = `${statePaths.lockFile}.reclaim`;
+    const body = lockRecord(999_999, '9999-12-31T23:59:59.999Z', 'future-reclaim');
+    await expectImpossibleOwnerRecovery(statePaths, claim, body, /^state\.lock\.reclaim\.orphan-[0-9a-f-]{36}$/i);
+  });
+  test('recovers and preserves an aged primary lock with an out-of-range PID', async () => {
+    const statePaths = await paths();
+    const body = lockRecord(2_147_483_648, '2000-01-01T00:00:00.000Z', 'invalid-pid-primary');
+    await expectImpossibleOwnerRecovery(statePaths, statePaths.lockFile, body, /^state\.lock\.orphan-[0-9a-f-]{36}$/i);
+  });
+  test('recovers and preserves an aged reclaim claim with an out-of-range PID', async () => {
+    const statePaths = await paths();
+    const claim = `${statePaths.lockFile}.reclaim`;
+    const body = lockRecord(2_147_483_648, '2000-01-01T00:00:00.000Z', 'invalid-pid-reclaim');
+    await expectImpossibleOwnerRecovery(statePaths, claim, body, /^state\.lock\.reclaim\.orphan-[0-9a-f-]{36}$/i);
+  });
+  test('preserves a parseable but noncanonical lock timestamp as malformed', async () => {
+    const statePaths = await paths();
+    const body = lockRecord(999_999, '2000-01-01T00:00:00Z', 'noncanonical-time');
+    await expectImpossibleOwnerRecovery(statePaths, statePaths.lockFile, body, /^state\.lock\.orphan-[0-9a-f-]{36}$/i);
+  });
+  test('does not displace aged far-future records owned by a live process', async () => {
+    const primaryPaths = await paths();
+    const reclaimPaths = await paths();
+    const primary = lockRecord(process.pid, '9999-12-31T23:59:59.999Z', 'live-future-primary');
+    const reclaim = lockRecord(process.pid, '9999-12-31T23:59:59.999Z', 'live-future-reclaim');
+    await writeFile(primaryPaths.lockFile, primary, { mode: 0o600 });
+    await writeFile(`${reclaimPaths.lockFile}.reclaim`, reclaim, { mode: 0o600 });
+    await ageArtifact(primaryPaths.lockFile);
+    await ageArtifact(`${reclaimPaths.lockFile}.reclaim`);
+
+    await Promise.all([
+      expect(mutateState(primaryPaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError),
+      expect(mutateState(reclaimPaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError),
+    ]);
+
+    expect(await readFile(primaryPaths.lockFile, 'utf8')).toBe(primary);
+    expect(await readFile(`${reclaimPaths.lockFile}.reclaim`, 'utf8')).toBe(reclaim);
   });
   test('does not remove a replacement lock owned by another token', async () => {
     const statePaths = await paths(); let replace!: () => void; let finish!: () => void; const ready = new Promise<void>((resolve) => { replace = resolve; }); const allowed = new Promise<void>((resolve) => { finish = resolve; });
