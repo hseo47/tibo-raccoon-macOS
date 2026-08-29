@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { lstat, mkdir, mkdtemp, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, stat, symlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -180,25 +180,33 @@ async function markTestStateDirectory(directory: string): Promise<void> {
   await writeFile(join(directory, TEST_STATE_MARKER), TEST_STATE_MARKER_CONTENT);
 }
 
-test('production path resolution accepts only representable plugin paths and dedicated test state directories', async () => {
-  const testDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-cli-'));
+test('production path resolution accepts only representable plugin paths and owned direct temporary state leaves', async () => {
+  const testDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
+  const allowedStateDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
+  const unknownEntryDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
+  const productionDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
+  const broadDirectory = await mkdtemp(join(tmpdir(), 'broad-repository-like-'));
+  const wrongPrefixDirectory = await mkdtemp(join(tmpdir(), 'wrong-prefix-'));
   const missingDirectory = join(testDirectory, 'missing');
-  const existingFile = join(testDirectory, 'not-a-directory');
-  const productionDirectory = join(testDirectory, 'production');
-  const wrongMarkerDirectory = join(testDirectory, 'wrong-marker');
-  const markerSymlinkDirectory = join(testDirectory, 'marker-symlink');
-  const symlinkDirectory = join(testDirectory, 'directory-symlink');
+  const existingFile = join(broadDirectory, 'not-a-directory');
+  const markerSymlinkDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
+  const symlinkDirectory = `${testDirectory}-symlink`;
+  const productionAlias = join(tmpdir(), `tibo-raccoon-alias-${crypto.randomUUID()}`);
   const absoluteExecutable = '/Applications/SwiftBar Plugins/tibo-raccoon.2m.js';
   await writeFile(existingFile, 'not a state directory');
-  await mkdir(productionDirectory);
-  await mkdir(wrongMarkerDirectory);
-  await mkdir(markerSymlinkDirectory);
   await markTestStateDirectory(testDirectory);
+  await markTestStateDirectory(allowedStateDirectory);
+  await writeFile(join(allowedStateDirectory, 'state.json'), JSON.stringify(stateWith()));
+  await markTestStateDirectory(unknownEntryDirectory);
+  await writeFile(join(unknownEntryDirectory, 'unexpected.txt'), 'must reject');
   await markTestStateDirectory(productionDirectory);
-  await writeFile(join(wrongMarkerDirectory, TEST_STATE_MARKER), 'wrong\n');
+  await markTestStateDirectory(broadDirectory);
+  await markTestStateDirectory(wrongPrefixDirectory);
   await symlink(join(testDirectory, TEST_STATE_MARKER), join(markerSymlinkDirectory, TEST_STATE_MARKER));
   await symlink(testDirectory, symlinkDirectory);
-  const wrongMarkerMode = (await stat(wrongMarkerDirectory)).mode & 0o777;
+  await symlink(tmpdir(), productionAlias);
+  const broadMode = (await stat(broadDirectory)).mode & 0o777;
+  const broadMarker = await Bun.file(join(broadDirectory, TEST_STATE_MARKER)).text();
 
   expect(resolvePluginPath({ SWIFTBAR_PLUGIN_PATH: 'relative.js' }, absoluteExecutable)).toBe(absoluteExecutable);
   expect(resolvePluginPath({ SWIFTBAR_PLUGIN_PATH: '/safe/plugin.js' }, absoluteExecutable)).toBe('/safe/plugin.js');
@@ -218,17 +226,20 @@ test('production path resolution accepts only representable plugin paths and ded
   expect(resolveStatePaths({}, productionDirectory).directory).toBe(productionDirectory);
   expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '0', TIBO_RACCOON_TEST_STATE_DIR: testDirectory }, productionDirectory).directory).toBe(productionDirectory);
   for (const rejected of [
-    'relative', missingDirectory, existingFile, wrongMarkerDirectory, markerSymlinkDirectory, symlinkDirectory,
-    productionDirectory, tmpdir(), process.cwd(), '/',
+    'relative', missingDirectory, existingFile, markerSymlinkDirectory, symlinkDirectory, productionDirectory,
+    `${productionAlias}/${productionDirectory.slice(tmpdir().length + 1)}`, broadDirectory, wrongPrefixDirectory,
+    unknownEntryDirectory, tmpdir(), process.cwd(), '/',
   ]) {
     expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: rejected }, productionDirectory).directory).toBe(productionDirectory);
   }
   expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: testDirectory }, productionDirectory).directory).toBe(testDirectory);
+  expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: allowedStateDirectory }, productionDirectory).directory).toBe(allowedStateDirectory);
   expect(isAbsolute(testDirectory)).toBe(true);
   expect(await Bun.file(missingDirectory).exists()).toBe(false);
   expect((await lstat(symlinkDirectory)).isSymbolicLink()).toBe(true);
   expect((await lstat(join(markerSymlinkDirectory, TEST_STATE_MARKER))).isSymbolicLink()).toBe(true);
-  expect((await stat(wrongMarkerDirectory)).mode & 0o777).toBe(wrongMarkerMode);
+  expect((await stat(broadDirectory)).mode & 0o777).toBe(broadMode);
+  expect(await Bun.file(join(broadDirectory, TEST_STATE_MARKER)).text()).toBe(broadMarker);
 });
 
 test('writer emits each non-empty stream exactly once and sets the result exit code', () => {

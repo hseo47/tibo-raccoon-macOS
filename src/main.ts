@@ -1,5 +1,6 @@
-import { lstatSync, readFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { runCli, type CliDependencies, type CliResult } from './cli';
 import type { Clock } from './domain';
@@ -15,6 +16,7 @@ type Writable = { write(value: string): unknown };
 
 const TEST_STATE_MARKER = '.tibo-raccoon-test-state';
 const TEST_STATE_MARKER_CONTENT = 'tibo-raccoon-test-state-v1\n';
+const TEST_STATE_DIRECTORY_PREFIX = 'tibo-raccoon-state-';
 const PLUGIN_PATH_ERROR = 'SwiftBar action path is unavailable';
 
 export type CliWriter = {
@@ -40,27 +42,55 @@ export function resolveStatePaths(
     ? productionPaths
     : defaultStatePaths({ testDirectory: productionDirectory });
   const testDirectory = environment.TIBO_RACCOON_TEST_STATE_DIR;
-  if (
+  const dedicatedDirectory = (
     environment.TIBO_RACCOON_TEST_MODE === '1' &&
     testDirectory !== undefined &&
     isAbsolute(testDirectory) &&
-    isDedicatedTestStateDirectory(testDirectory, fallback.directory)
-  ) {
-    return defaultStatePaths({ testDirectory });
-  }
+    resolveDedicatedTestStateDirectory(testDirectory, fallback.directory)
+  );
+  if (typeof dedicatedDirectory === 'string') return defaultStatePaths({ testDirectory: dedicatedDirectory });
   return fallback;
 }
 
-function isDedicatedTestStateDirectory(path: string, productionDirectory: string): boolean {
-  if (resolve(path) === resolve(productionDirectory)) return false;
+function resolveDedicatedTestStateDirectory(path: string, productionDirectory: string): string | null {
   try {
-    if (!lstatSync(path).isDirectory()) return false;
-    const marker = join(path, TEST_STATE_MARKER);
-    if (!lstatSync(marker).isFile()) return false;
-    return readFileSync(marker, 'utf8') === TEST_STATE_MARKER_CONTENT;
+    if (!lstatSync(path).isDirectory()) return null;
+    const directory = realpathSync(path);
+    const canonicalProductionDirectory = canonicalPath(productionDirectory);
+    if (canonicalProductionDirectory !== null && directory === canonicalProductionDirectory) return null;
+    if (dirname(directory) !== realpathSync(tmpdir())) return null;
+    const leaf = basename(directory);
+    if (!leaf.startsWith(TEST_STATE_DIRECTORY_PREFIX) || leaf.length === TEST_STATE_DIRECTORY_PREFIX.length) return null;
+    const marker = join(directory, TEST_STATE_MARKER);
+    if (!lstatSync(marker).isFile()) return null;
+    if (readFileSync(marker, 'utf8') !== TEST_STATE_MARKER_CONTENT) return null;
+    if (!hasOnlyAllowedTestStateEntries(directory)) return null;
+    return path;
   } catch {
-    return false;
+    return null;
   }
+}
+
+function canonicalPath(path: string): string | null {
+  try { return realpathSync(path); } catch { return null; }
+}
+
+function hasOnlyAllowedTestStateEntries(directory: string): boolean {
+  return readdirSync(directory).every((entry) => {
+    if (!isAllowedTestStateEntry(entry)) return false;
+    return lstatSync(join(directory, entry)).isFile();
+  });
+}
+
+function isAllowedTestStateEntry(entry: string): boolean {
+  if (entry === TEST_STATE_MARKER || entry === 'state.json' || entry === 'state.lock' || entry === 'state.lock.reclaim' || entry === 'state.json.recovery') {
+    return true;
+  }
+  return (
+    /^state\.json\.tmp-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry) ||
+    /^state\.json\.recovery\.tmp-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry) ||
+    /^state\.json\.corrupt-\d{8}T\d{9}Z$/.test(entry)
+  );
 }
 
 export function createProductionDependencies(options: {
