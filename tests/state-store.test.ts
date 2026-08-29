@@ -11,6 +11,12 @@ const pathsToClean: Array<Awaited<ReturnType<typeof tempStatePaths>>> = [];
 async function paths(): Promise<Awaited<ReturnType<typeof tempStatePaths>>> { const value = await tempStatePaths(); pathsToClean.push(value); return value; }
 async function mode(path: string): Promise<number> { return (await stat(path)).mode & 0o777; }
 function lockRecord(pid: number, createdAt: string, token = 'test-owner'): string { return JSON.stringify({ pid, createdAt, token }); }
+async function faultChild(statePaths: Awaited<ReturnType<typeof tempStatePaths>>, fault: string): Promise<{ threw: boolean; fired: boolean; quarantined: boolean; renamed: boolean }> {
+  const child = Bun.spawn([process.execPath, join(process.cwd(), 'tests/helpers/state-store-fault-child.ts'), fault, statePaths.directory]);
+  expect(await child.exited).toBe(0);
+  return JSON.parse(await readFile(join(statePaths.directory, 'fault-result.json'), 'utf8'));
+}
+async function waitFor(path: string): Promise<void> { for (let i = 0; i < 200; i += 1) { try { await stat(path); return; } catch { await Bun.sleep(5); } } throw new Error('fault child did not signal'); }
 
 afterEach(async () => { await Promise.all(pathsToClean.splice(0).map(cleanupTempState)); });
 
@@ -36,6 +42,50 @@ describe('private state paths and writes', () => {
     expect((await readdir(statePaths.directory)).filter((name) => name.includes('.tmp-'))).toEqual([]);
     await expect(stat(statePaths.lockFile)).rejects.toThrow();
     expect((await loadState(statePaths)).state.knownIds).toEqual(['persisted']);
+  });
+});
+
+describe('isolated filesystem fault handling', () => {
+  for (const fault of ['lock-write', 'lock-sync', 'lock-close']) {
+    test(`cleans its created lock after ${fault} fails`, async () => {
+      const statePaths = await paths(); const result = await faultChild(statePaths, fault);
+      expect(result).toMatchObject({ threw: true, fired: true });
+      expect((await readdir(statePaths.directory)).filter((name) => name === 'state.lock' || name.includes('.reclaim') || name.includes('.tmp-'))).toEqual([]);
+      expect((await mutateState(statePaths, (current) => ({ ...current, knownIds: ['later'] }))).knownIds).toEqual(['later']);
+    });
+  }
+
+  test('keeps the old state and cleans its temporary when rename is interrupted', async () => {
+    const statePaths = await paths(); const result = await faultChild(statePaths, 'before-rename');
+    expect(result).toMatchObject({ threw: true, fired: true, renamed: false });
+    expect((await loadState(statePaths)).state.knownIds).toEqual(['old']);
+    expect((await readdir(statePaths.directory)).filter((name) => name.includes('.tmp-'))).toEqual([]);
+    expect((await mutateState(statePaths, (current) => ({ ...current, knownIds: ['later'] }))).knownIds).toEqual(['later']);
+  });
+
+  test('keeps the committed state when post-rename chmod fails', async () => {
+    const statePaths = await paths(); const result = await faultChild(statePaths, 'post-rename-chmod');
+    expect(result).toMatchObject({ threw: false, fired: true, renamed: true });
+    expect((await loadState(statePaths)).state.knownIds).toEqual(['new']);
+    expect(await mode(statePaths.stateFile)).toBe(0o600);
+  });
+
+  test('observes a private same-directory temporary before rename', async () => {
+    const statePaths = await paths(); const child = Bun.spawn([process.execPath, join(process.cwd(), 'tests/helpers/state-store-fault-child.ts'), 'observe-temp', statePaths.directory]);
+    await waitFor(join(statePaths.directory, 'temp-ready'));
+    const temporary = (await readdir(statePaths.directory)).find((name) => name.startsWith('state.json.tmp-'));
+    expect(temporary).toBeDefined(); expect(await mode(join(statePaths.directory, temporary!))).toBe(0o600);
+    await writeFile(join(statePaths.directory, 'temp-release'), 'release'); expect(await child.exited).toBe(0);
+    expect((await loadState(statePaths)).state.knownIds).toEqual(['new']); expect((await readdir(statePaths.directory)).filter((name) => name.includes('.tmp-'))).toEqual([]);
+  });
+
+  test('resumes durable recovery after replacement fails following quarantine', async () => {
+    const statePaths = await paths(); const result = await faultChild(statePaths, 'recovery-after-quarantine');
+    expect(result).toMatchObject({ threw: true, fired: true, quarantined: true });
+    const quarantines = (await readdir(statePaths.directory)).filter((name) => /^state\.json\.corrupt-\d{8}T\d{9}Z$/.test(name));
+    expect(quarantines).toHaveLength(1); expect(await readFile(join(statePaths.directory, quarantines[0]!), 'utf8')).toBe('{broken');
+    const recovered = await loadState(statePaths); expect(recovered).toEqual({ state: createInitialState({ recoveryPending: true }), source: 'recovered' });
+    expect((await loadState(statePaths)).state.recoveryPending).toBe(true); await expect(stat(join(statePaths.directory, 'state.json.recovery'))).rejects.toThrow();
   });
 });
 
