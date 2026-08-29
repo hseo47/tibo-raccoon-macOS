@@ -30,3 +30,15 @@ export type RaccoonState = {
 export interface Clock {
   now(): Date;
 }
+
+/**
+ * Compares opaque IDs by UTF-16 code units, independent of the runtime locale.
+ */
+export function compareOpaqueIds(left: string, right: string): number {
+  const sharedLength = Math.min(left.length, right.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference = left.charCodeAt(index) - right.charCodeAt(index);
+    if (difference !== 0) return difference;
+  }
+  return left.length - right.length;
+}

@@ -28,10 +28,10 @@ bun run live-check
 First choose the SwiftBar plugin directory yourself. Then run this exact command, replacing the quoted absolute directory with your chosen SwiftBar plugin directory:
 
 ```sh
-bun run install:plugin -- --plugin-dir "/absolute/path/to/SwiftBar Plugins"
+bun --no-install run install:plugin -- --plugin-dir "/absolute/path/to/SwiftBar Plugins"
 ```
 
-The command builds one `tibo-raccoon.2m.js` artifact, installs only that file with mode `0755`, prints its exact installed path, and never installs dependencies. In SwiftBar, choose **Refresh All** after it completes.
+The command explicitly disables Bun auto-install, builds one `tibo-raccoon.2m.js` artifact, installs only that file with mode `0755`, prints its exact installed path, and never installs dependencies. If contributor dependencies are missing, it exits with a fixed instruction to run `bun install`; that contributor-only command remains a separate action. In SwiftBar, choose **Refresh All** after installation completes.
 
 ## What the raccoon means
 

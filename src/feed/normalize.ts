@@ -1,4 +1,4 @@
-import type { Post } from '../domain';
+import { compareOpaqueIds, type Post } from '../domain';
 
 const MAX_ITEMS = 500;
 const MAX_TEXT_CODE_POINTS = 32_768;
@@ -163,5 +163,5 @@ function comparePosts(left: Post, right: Post): number {
   if (left.publishedAt !== right.publishedAt) {
     return left.publishedAt === null || right.publishedAt === null ? 0 : right.publishedAt.localeCompare(left.publishedAt);
   }
-  return right.id.localeCompare(left.id);
+  return compareOpaqueIds(right.id, left.id);
 }

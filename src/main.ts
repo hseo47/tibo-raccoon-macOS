@@ -18,6 +18,9 @@ const TEST_STATE_MARKER = '.tibo-raccoon-test-state';
 const TEST_STATE_MARKER_CONTENT = 'tibo-raccoon-test-state-v1\n';
 const TEST_STATE_DIRECTORY_PREFIX = 'tibo-raccoon-state-';
 const PLUGIN_PATH_ERROR = 'SwiftBar action path is unavailable';
+const TEST_STATE_CONFIGURATION_ERROR = 'Test state configuration is invalid';
+
+class TestStateConfigurationError extends Error {}
 
 export type CliWriter = {
   stdout: Writable;
@@ -41,15 +44,13 @@ export function resolveStatePaths(
   const fallback = productionDirectory === undefined
     ? productionPaths
     : defaultStatePaths({ testDirectory: productionDirectory });
+  if (environment.TIBO_RACCOON_TEST_MODE !== '1') return fallback;
   const testDirectory = environment.TIBO_RACCOON_TEST_STATE_DIR;
-  const dedicatedDirectory = (
-    environment.TIBO_RACCOON_TEST_MODE === '1' &&
-    testDirectory !== undefined &&
-    isAbsolute(testDirectory) &&
-    resolveDedicatedTestStateDirectory(testDirectory, fallback.directory)
-  );
+  const dedicatedDirectory = testDirectory !== undefined && isAbsolute(testDirectory)
+    ? resolveDedicatedTestStateDirectory(testDirectory, fallback.directory)
+    : null;
   if (typeof dedicatedDirectory === 'string') return defaultStatePaths({ testDirectory: dedicatedDirectory });
-  return fallback;
+  throw new TestStateConfigurationError(TEST_STATE_CONFIGURATION_ERROR);
 }
 
 function resolveDedicatedTestStateDirectory(path: string, productionDirectory: string): string | null {
@@ -89,6 +90,8 @@ function isAllowedTestStateEntry(entry: string): boolean {
   return (
     /^state\.json\.tmp-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry) ||
     /^state\.json\.recovery\.tmp-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry) ||
+    /^state\.lock(?:\.reclaim)?\.owner-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry) ||
+    /^state\.lock(?:\.reclaim)?\.orphan-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry) ||
     /^state\.json\.corrupt-\d{8}T\d{9}Z$/.test(entry)
   );
 }
@@ -133,8 +136,9 @@ export async function runProductionCli(argv: readonly string[], options: {
     if (options.environment !== undefined) dependencyOptions.environment = options.environment;
     if (options.executablePath !== undefined) dependencyOptions.executablePath = options.executablePath;
     result = await runCli(argv, createProductionDependencies(dependencyOptions));
-  } catch {
-    result = { stdout: '', stderr: `${PLUGIN_PATH_ERROR}\n`, exitCode: 1 };
+  } catch (error) {
+    const message = error instanceof TestStateConfigurationError ? TEST_STATE_CONFIGURATION_ERROR : PLUGIN_PATH_ERROR;
+    result = { stdout: '', stderr: `${message}\n`, exitCode: 1 };
   }
   writeCliResult(result, options.writer);
 }

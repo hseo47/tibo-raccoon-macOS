@@ -1,5 +1,5 @@
-import { expect, test } from 'bun:test';
-import { lstat, mkdtemp, realpath, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { afterEach, expect, test } from 'bun:test';
+import { lstat, mkdtemp, realpath, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -175,21 +175,45 @@ test('unknown and multiple arguments are inert and return usage exit code', asyn
 
 const TEST_STATE_MARKER = '.tibo-raccoon-test-state';
 const TEST_STATE_MARKER_CONTENT = 'tibo-raccoon-test-state-v1\n';
+const trackedTemporaryEntries: string[] = [];
+
+async function trackedMkdtemp(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  trackedTemporaryEntries.push(directory);
+  return directory;
+}
+
+async function trackedSymlink(target: string, path: string): Promise<void> {
+  expect(join(tmpdir(), basename(path))).toBe(path);
+  await expect(lstat(path)).rejects.toThrow();
+  await symlink(target, path);
+  trackedTemporaryEntries.push(path);
+}
+
+afterEach(async () => {
+  for (const path of trackedTemporaryEntries.splice(0).reverse()) {
+    expect(join(tmpdir(), basename(path))).toBe(path);
+    const entry = await lstat(path);
+    if (entry.isSymbolicLink() || entry.isFile()) await unlink(path);
+    else await rm(path, { recursive: true, force: true });
+    await expect(lstat(path)).rejects.toThrow();
+  }
+});
 
 async function markTestStateDirectory(directory: string): Promise<void> {
   await writeFile(join(directory, TEST_STATE_MARKER), TEST_STATE_MARKER_CONTENT);
 }
 
 test('production path resolution accepts only representable plugin paths and owned direct temporary state leaves', async () => {
-  const testDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
-  const allowedStateDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
-  const unknownEntryDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
-  const productionDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
-  const broadDirectory = await mkdtemp(join(tmpdir(), 'broad-repository-like-'));
-  const wrongPrefixDirectory = await mkdtemp(join(tmpdir(), 'wrong-prefix-'));
+  const testDirectory = await trackedMkdtemp('tibo-raccoon-state-');
+  const allowedStateDirectory = await trackedMkdtemp('tibo-raccoon-state-');
+  const unknownEntryDirectory = await trackedMkdtemp('tibo-raccoon-state-');
+  const productionDirectory = await trackedMkdtemp('tibo-raccoon-state-');
+  const broadDirectory = await trackedMkdtemp('broad-repository-like-');
+  const wrongPrefixDirectory = await trackedMkdtemp('wrong-prefix-');
   const missingDirectory = join(testDirectory, 'missing');
   const existingFile = join(broadDirectory, 'not-a-directory');
-  const markerSymlinkDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
+  const markerSymlinkDirectory = await trackedMkdtemp('tibo-raccoon-state-');
   const symlinkDirectory = `${testDirectory}-symlink`;
   const productionAlias = join(tmpdir(), `tibo-raccoon-alias-${crypto.randomUUID()}`);
   const absoluteExecutable = '/Applications/SwiftBar Plugins/tibo-raccoon.2m.js';
@@ -197,14 +221,16 @@ test('production path resolution accepts only representable plugin paths and own
   await markTestStateDirectory(testDirectory);
   await markTestStateDirectory(allowedStateDirectory);
   await writeFile(join(allowedStateDirectory, 'state.json'), JSON.stringify(stateWith()));
+  await writeFile(join(allowedStateDirectory, 'state.lock.owner-11111111-1111-4111-8111-111111111111'), 'crash residue');
+  await writeFile(join(allowedStateDirectory, 'state.lock.reclaim.owner-22222222-2222-4222-8222-222222222222'), 'crash residue');
   await markTestStateDirectory(unknownEntryDirectory);
   await writeFile(join(unknownEntryDirectory, 'unexpected.txt'), 'must reject');
   await markTestStateDirectory(productionDirectory);
   await markTestStateDirectory(broadDirectory);
   await markTestStateDirectory(wrongPrefixDirectory);
   await symlink(join(testDirectory, TEST_STATE_MARKER), join(markerSymlinkDirectory, TEST_STATE_MARKER));
-  await symlink(testDirectory, symlinkDirectory);
-  await symlink(tmpdir(), productionAlias);
+  await trackedSymlink(testDirectory, symlinkDirectory);
+  await trackedSymlink(tmpdir(), productionAlias);
   const broadMode = (await stat(broadDirectory)).mode & 0o777;
   const broadMarker = await Bun.file(join(broadDirectory, TEST_STATE_MARKER)).text();
 
@@ -230,8 +256,9 @@ test('production path resolution accepts only representable plugin paths and own
     `${productionAlias}/${productionDirectory.slice(tmpdir().length + 1)}`, broadDirectory, wrongPrefixDirectory,
     unknownEntryDirectory, tmpdir(), process.cwd(), '/',
   ]) {
-    expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: rejected }, productionDirectory).directory).toBe(productionDirectory);
+    expect(() => resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: rejected }, productionDirectory)).toThrow('Test state configuration is invalid');
   }
+  expect(() => resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1' }, productionDirectory)).toThrow('Test state configuration is invalid');
   expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: testDirectory }, productionDirectory).directory).toBe(await realpath(testDirectory));
   expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: allowedStateDirectory }, productionDirectory).directory).toBe(await realpath(allowedStateDirectory));
   expect(isAbsolute(testDirectory)).toBe(true);
@@ -243,12 +270,12 @@ test('production path resolution accepts only representable plugin paths and own
 });
 
 test('accepted test state aliases return the immutable canonical temporary leaf', async () => {
-  const candidate = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
-  const productionDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
-  const retarget = await mkdtemp(join(tmpdir(), 'unrelated-alias-target-'));
+  const candidate = await trackedMkdtemp('tibo-raccoon-state-');
+  const productionDirectory = await trackedMkdtemp('tibo-raccoon-state-');
+  const retarget = await trackedMkdtemp('unrelated-alias-target-');
   const alias = join(tmpdir(), `tibo-raccoon-canonical-alias-${crypto.randomUUID()}`);
   await markTestStateDirectory(candidate);
-  await symlink(tmpdir(), alias);
+  await trackedSymlink(tmpdir(), alias);
 
   const aliasCandidate = join(alias, basename(candidate));
   const paths = resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: aliasCandidate }, productionDirectory);
@@ -294,5 +321,39 @@ test('production CLI reports an unrepresentable fallback path with fixed stderr 
 
   expect(stdout).toEqual([]);
   expect(stderr).toEqual(['SwiftBar action path is unavailable\n']);
+  expect(target.exitCode).toBe(1);
+});
+
+test('production CLI fails closed on missing test state configuration before fetch or state access', async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const target = { exitCode: 0 };
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  const blockedFetch = Object.assign(
+    (..._arguments: Parameters<typeof fetch>): ReturnType<typeof fetch> => {
+      fetchCalls += 1;
+      return Promise.reject(new Error('must not fetch'));
+    },
+    { preconnect: (_url: string | URL): void => undefined },
+  ) satisfies typeof fetch;
+  globalThis.fetch = blockedFetch;
+  try {
+    await runProductionCli([], {
+      environment: { TIBO_RACCOON_TEST_MODE: '1' },
+      executablePath: '/safe/tibo-raccoon.2m.js',
+      writer: {
+        stdout: { write: (value) => { stdout.push(value); return true; } },
+        stderr: { write: (value) => { stderr.push(value); return true; } },
+        process: target,
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  expect(fetchCalls).toBe(0);
+  expect(stdout).toEqual([]);
+  expect(stderr).toEqual(['Test state configuration is invalid\n']);
   expect(target.exitCode).toBe(1);
 });

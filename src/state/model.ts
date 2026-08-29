@@ -1,4 +1,4 @@
-import type { FeedErrorKind, Post, RaccoonState } from '../domain';
+import { compareOpaqueIds, type FeedErrorKind, type Post, type RaccoonState } from '../domain';
 import { parseRfc3339, sanitizePostUrl } from '../feed/normalize';
 
 const MAX_READ_POSTS = 100;
@@ -196,7 +196,7 @@ function orderUnreadIds(unreadIds: ReadonlySet<string>, posts: readonly Post[]):
     if (leftPost !== undefined && rightPost !== undefined) return comparePosts(leftPost, rightPost);
     if (leftPost !== undefined) return -1;
     if (rightPost !== undefined) return 1;
-    return right.localeCompare(left);
+    return compareOpaqueIds(right, left);
   });
 }
 
@@ -222,7 +222,7 @@ function clonePost(post: Post): Post {
 }
 
 function compareIdsAscending(left: string, right: string): number {
-  return left.localeCompare(right);
+  return compareOpaqueIds(left, right);
 }
 
 function comparePosts(left: Post, right: Post): number {
@@ -231,7 +231,7 @@ function comparePosts(left: Post, right: Post): number {
   if (left.publishedAt !== right.publishedAt) {
     return left.publishedAt === null || right.publishedAt === null ? 0 : right.publishedAt.localeCompare(left.publishedAt);
   }
-  return right.id.localeCompare(left.id);
+  return compareOpaqueIds(right.id, left.id);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

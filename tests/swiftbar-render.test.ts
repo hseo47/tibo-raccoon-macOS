@@ -101,6 +101,18 @@ test('retains every unread post when unread alone exceeds the minimum', () => {
   expect(selectMenuPosts(stateWith({ cachedPosts: items, unreadIds: items.map(({ id }) => id) }))).toHaveLength(6);
 });
 
+test('uses descending UTF-16 opaque IDs for equal and unavailable timestamp ties', () => {
+  const items = [
+    post('z', { publishedAt: null }),
+    post('\u00e4', { publishedAt: null }),
+    post('\u{10000}', { publishedAt: '2026-08-29T00:00:00.000Z' }),
+    post('\uE000', { publishedAt: '2026-08-29T00:00:00.000Z' }),
+  ];
+  const state = stateWith({ cachedPosts: items, unreadIds: items.map(({ id }) => id) });
+
+  expect(selectMenuPosts(state).map(({ id }) => id)).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
+});
+
 test('uses exact media and unavailable-link fallbacks', () => {
   const menu = renderSwiftBarMenu({
     state: stateWith({ cachedPosts: [post('media', { text: '', publishedAt: null, url: null })] }),

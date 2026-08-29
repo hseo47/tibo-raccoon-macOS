@@ -67,6 +67,19 @@ describe('normalizeDayclawPayload', () => {
 
     expect(posts.map(({ id }) => id)).toEqual(['z', 'a', 'older', 'no-time-z', 'no-time-a']);
   });
+
+  test('orders equal and unavailable timestamps by descending UTF-16 opaque IDs', () => {
+    const posts = normalizeDayclawPayload({
+      items: [
+        { id: 'z', content: 'unavailable time' },
+        { id: '\u00e4', content: 'unavailable time' },
+        { id: '\u{10000}', content: 'same time', publishedAt: '2026-08-29T00:00:00Z' },
+        { id: '\uE000', content: 'same time', publishedAt: '2026-08-29T00:00:00Z' },
+      ],
+    });
+
+    expect(posts.map(({ id }) => id)).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
+  });
 });
 
 test('accepts only strict timezone-bearing RFC 3339', () => {

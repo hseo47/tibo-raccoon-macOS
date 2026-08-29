@@ -1,10 +1,28 @@
 import { expect, test } from 'bun:test';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { ICON_BASE64, ICON_SHA256 } from '../src/generated/icons';
-import { assertAllowedRuntimeImports, buildPlugin, extractRuntimeImportSpecifiers } from '../scripts/build';
+import { assertAllowedRuntimeImports, buildPlugin, extractRuntimeImportSpecifiers, verifyArtifact } from '../scripts/build';
+
+type IconState = 'calm' | 'unread' | 'offline';
+type Appearance = 'light' | 'dark';
+
+const EXPECTED_ICON_SHA256 = {
+  calm: {
+    light: '634b33bf51a56f8aa89cefb56b4dedacbec5bd080bc06fa25eb8603188748b5f',
+    dark: 'd126b462d565f3a1ef93ce46df5b3b61c9ae348dd6defc0086acd10a149a4a8d',
+  },
+  unread: {
+    light: 'b1d4b4b8b4ad16b5b4010c00022f56ae1081feafb51efc528434325be867d82f',
+    dark: '85e5c4755ca3d11397ce1e89ce338c02b3383bebb37cea057cbad65b00eedb51',
+  },
+  offline: {
+    light: 'cabc517a15fa224951187a1eb30cb17d0d0b49b3a858b4c8ff35cc5fa45d2a75',
+    dark: '2fab508119b511e6a7578137a2a856640ef942b79040035d5879cdfeb556d697',
+  },
+} as const satisfies Record<IconState, Record<Appearance, string>>;
 
 const metadata = [
   '// <xbar.title>Tibo Raccoon</xbar.title>',
@@ -15,11 +33,9 @@ const metadata = [
   '// <swiftbar.runInBash>false</swiftbar.runInBash>',
 ] as const;
 
-test('builds one directly executable SwiftBar artifact without runtime assets or imports', async () => {
+test('builds one directly executable SwiftBar artifact and maps every runtime icon exactly', async () => {
   const buildDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-build-'));
   const secondBuildDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-build-'));
-  const smokeRoot = await mkdtemp(join(tmpdir(), 'tibo-raccoon-smoke-'));
-  const stateDirectory = await mkdtemp(join(smokeRoot, 'tibo-raccoon-state-'));
   const output = join(buildDirectory, 'tibo-raccoon.2m.js');
   const secondOutput = join(secondBuildDirectory, 'tibo-raccoon.2m.js');
 
@@ -35,12 +51,7 @@ test('builds one directly executable SwiftBar artifact without runtime assets or
     expect((await stat(output)).mode & 0o777).toBe(0o755);
     expect(source.startsWith(`#!${process.execPath}\n`)).toBe(true);
     for (const line of metadata) expect(source).toContain(line);
-    for (const state of ['calm', 'unread', 'offline'] as const) {
-      for (const appearance of ['light', 'dark'] as const) {
-        expect(source).toContain(ICON_BASE64[state][appearance]);
-        expect(source).toContain(ICON_SHA256[state][appearance]);
-      }
-    }
+    expect(source).not.toContain('tibo-raccoon-icon-integrity');
     expect(source).not.toContain('sourceMappingURL');
     expect(source).not.toContain('assets/icons');
     expect(extractRuntimeImportSpecifiers(source)).toEqual([
@@ -51,48 +62,37 @@ test('builds one directly executable SwiftBar artifact without runtime assets or
       'path',
     ]);
 
-    await writeFile(join(stateDirectory, '.tibo-raccoon-test-state'), 'tibo-raccoon-test-state-v1\n', { mode: 0o600 });
-    await mkdir(join(smokeRoot, 'home'), { mode: 0o700 });
-    const attemptedAt = '2026-08-30T00:00:00.000Z';
-    await writeFile(join(stateDirectory, 'state.json'), `${JSON.stringify({
-      version: 1,
-      initializedAt: attemptedAt,
-      recoveryPending: false,
-      knownIds: [],
-      unreadIds: [],
-      cachedPosts: [],
-      lastAttemptAt: attemptedAt,
-      lastSuccessAt: attemptedAt,
-      consecutiveFailures: 0,
-      nextRetryAt: '9999-12-31T23:59:59.999Z',
-      lastError: null,
-    })}\n`, { mode: 0o600 });
-    await chmod(output, 0o755);
+    await expectCanonicalAssets();
 
-    const child = Bun.spawn([output], {
-      env: {
-        HOME: join(smokeRoot, 'home'),
-        TMPDIR: smokeRoot,
-        TIBO_RACCOON_TEST_MODE: '1',
-        TIBO_RACCOON_TEST_STATE_DIR: stateDirectory,
-        SWIFTBAR_PLUGIN_PATH: output,
-      },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const exitCode = await awaitChildExit(child, 5_000);
-    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    const emittedBase64 = {} as Record<IconState, Record<Appearance, string>>;
+    for (const iconState of ['calm', 'unread', 'offline'] as const) {
+      const execution = await executeArtifact(output, iconState);
+      expect(execution.exitCode).toBe(0);
+      expect(execution.stderr).toBe('');
+      expect(execution.lines).toContain('---');
+      expect(execution.lines).toContain(`Tibo Raccoon · ${iconState === 'unread' ? 1 : 0} unread`);
 
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe('');
-    const lines = stdout.trimEnd().split('\n');
-    expect(lines[0]).toMatch(/^\|\s*image=[^\s]+\s+dropdown=false$/);
-    expect(lines).toContain('---');
-    expect(lines).toContain('Tibo Raccoon · 0 unread');
+      emittedBase64[iconState] = {} as Record<Appearance, string>;
+      for (const appearance of ['light', 'dark'] as const) {
+        const encoded = execution.images[appearance];
+        emittedBase64[iconState][appearance] = encoded;
+        expect(sha256(Buffer.from(encoded, 'base64'))).toBe(EXPECTED_ICON_SHA256[iconState][appearance]);
+        expect(source).toContain(encoded);
+      }
+    }
+    expect(new Set(Object.values(emittedBase64).flatMap(({ light, dark }) => [light, dark])).size).toBe(6);
+
+    const tamperedDirectory = join(buildDirectory, 'tampered');
+    const tamperedOutput = join(tamperedDirectory, 'tibo-raccoon.2m.js');
+    await mkdir(tamperedDirectory, { mode: 0o700 });
+    let tamperedSource = swapLiterals(source, emittedBase64.calm.light, emittedBase64.unread.light);
+    tamperedSource = swapLiterals(tamperedSource, emittedBase64.calm.dark, emittedBase64.unread.dark);
+    await writeFile(tamperedOutput, tamperedSource, { mode: 0o755 });
+    await chmod(tamperedOutput, 0o755);
+    await expect(verifyArtifact(tamperedOutput, process.execPath)).rejects.toThrow('Plugin artifact verification failed');
   } finally {
     await rm(buildDirectory, { recursive: true, force: true });
     await rm(secondBuildDirectory, { recursive: true, force: true });
-    await rm(smokeRoot, { recursive: true, force: true });
   }
 });
 
@@ -136,6 +136,103 @@ test('ignores import-looking strings and comments in emitted JavaScript', async 
   expect(extractRuntimeImportSpecifiers(emitted)).toEqual([]);
   expect(() => assertAllowedRuntimeImports(emitted)).not.toThrow();
 });
+
+async function executeArtifact(output: string, iconState: IconState): Promise<{
+  exitCode: number;
+  stderr: string;
+  lines: string[];
+  images: Record<Appearance, string>;
+}> {
+  const executionRoot = await mkdtemp(join(tmpdir(), 'tibo-raccoon-artifact-exec-'));
+  const home = join(executionRoot, 'home');
+  const childTmp = join(executionRoot, 'tmp');
+  const fallbackDirectory = join(home, 'Library', 'Application Support', 'Tibo Raccoon');
+  await mkdir(home, { mode: 0o700 });
+  await mkdir(childTmp, { mode: 0o700 });
+  await mkdir(fallbackDirectory, { recursive: true, mode: 0o700 });
+  const stateDirectory = await mkdtemp(join(childTmp, 'tibo-raccoon-state-'));
+  const stateBody = `${JSON.stringify(canonicalState(iconState))}\n`;
+
+  try {
+    await writeFile(join(stateDirectory, '.tibo-raccoon-test-state'), 'tibo-raccoon-test-state-v1\n', { mode: 0o600 });
+    await writeFile(join(stateDirectory, 'state.json'), stateBody, { mode: 0o600 });
+    await writeFile(join(fallbackDirectory, 'state.json'), stateBody, { mode: 0o600 });
+
+    const child = Bun.spawn([output], {
+      env: {
+        HOME: home,
+        TMPDIR: childTmp,
+        TIBO_RACCOON_TEST_MODE: '1',
+        TIBO_RACCOON_TEST_STATE_DIR: stateDirectory,
+        SWIFTBAR_PLUGIN_PATH: output,
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const exitCode = await awaitChildExit(child, 5_000);
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    const lines = stdout.trimEnd().split('\n');
+    const header = lines[0] ?? '';
+    const match = /^\| image=([^,\s]+),([^\s]+) dropdown=false$/.exec(header);
+    if (match === null || match[1] === undefined || match[2] === undefined) {
+      throw new Error('Artifact did not emit a valid SwiftBar image header');
+    }
+    return { exitCode, stderr, lines, images: { light: match[1], dark: match[2] } };
+  } finally {
+    await rm(executionRoot, { recursive: true, force: true });
+  }
+}
+
+function canonicalState(iconState: IconState): object {
+  const attemptedAt = '9999-12-31T23:59:58.000Z';
+  const unread = iconState === 'unread';
+  return {
+    version: 1,
+    initializedAt: '2026-08-30T00:00:00.000Z',
+    recoveryPending: false,
+    knownIds: unread ? ['new-post'] : [],
+    unreadIds: unread ? ['new-post'] : [],
+    cachedPosts: unread ? [{
+      id: 'new-post',
+      text: 'new post',
+      publishedAt: '2026-08-30T00:01:00.000Z',
+      url: 'https://x.com/thsottiaux/status/new-post',
+    }] : [],
+    lastAttemptAt: attemptedAt,
+    lastSuccessAt: '2026-08-30T00:00:00.000Z',
+    consecutiveFailures: iconState === 'offline' ? 3 : 0,
+    nextRetryAt: '9999-12-31T23:59:59.999Z',
+    lastError: iconState === 'offline' ? 'network' : null,
+  };
+}
+
+async function expectCanonicalAssets(): Promise<void> {
+  const manifest = JSON.parse(await readFile(join(import.meta.dir, '../assets/icons/sha256.json'), 'utf8')) as unknown;
+  const expectedManifest = {
+    'calm-dark.png': EXPECTED_ICON_SHA256.calm.dark,
+    'calm-light.png': EXPECTED_ICON_SHA256.calm.light,
+    'offline-dark.png': EXPECTED_ICON_SHA256.offline.dark,
+    'offline-light.png': EXPECTED_ICON_SHA256.offline.light,
+    'unread-dark.png': EXPECTED_ICON_SHA256.unread.dark,
+    'unread-light.png': EXPECTED_ICON_SHA256.unread.light,
+  };
+  expect(manifest).toEqual(expectedManifest);
+  for (const [filename, expectedHash] of Object.entries(expectedManifest)) {
+    expect(sha256(await readFile(join(import.meta.dir, '../assets/icons', filename)))).toBe(expectedHash);
+  }
+}
+
+function sha256(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function swapLiterals(source: string, left: string, right: string): string {
+  const placeholder = `__TIBO_RACCOON_SWAP_${randomUUID()}__`;
+  if (source.includes(placeholder) || !source.includes(left) || !source.includes(right)) {
+    throw new Error('Could not prepare artifact mapping mutation');
+  }
+  return source.replaceAll(left, placeholder).replaceAll(right, left).replaceAll(placeholder, right);
+}
 
 async function emitJavaScript(source: string, external: string[] = []): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-import-scan-'));

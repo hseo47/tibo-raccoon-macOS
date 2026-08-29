@@ -6,9 +6,11 @@ import { isAbsolute, join, relative } from 'node:path';
 import { runCli, type CliResult } from '../src/cli';
 import type { FeedErrorKind, Post } from '../src/domain';
 import { FeedError } from '../src/feed/client';
+import { normalizeDayclawPayload } from '../src/feed/normalize';
 import { poll } from '../src/poll';
+import { applySuccessfulPoll, createInitialState } from '../src/state/model';
 import { defaultStatePaths, loadState, mutateState, type StatePaths } from '../src/state/store';
-import { renderSwiftBarMenu } from '../src/swiftbar/render';
+import { renderSwiftBarMenu, selectMenuPosts } from '../src/swiftbar/render';
 import { isRepresentableSwiftBarPluginPath } from '../src/swiftbar/plugin-path';
 import { post } from './helpers/factories';
 import { FakeClock } from './helpers/fake-clock';
@@ -41,6 +43,27 @@ type FetchBarrier = {
 const rootsByStateDirectory = new Map<string, string>();
 const fetchCallsByStateDirectory = new Map<string, number>();
 let nextFetchBarrier: FetchBarrier | null = null;
+
+test('normalizer, state, and menu share the UTF-16 opaque-ID ordering contract', () => {
+  const normalized = normalizeDayclawPayload({
+    items: [
+      { id: 'z', content: 'unavailable time' },
+      { id: '\u00e4', content: 'unavailable time' },
+      { id: '\u{10000}', content: 'same time', publishedAt: '2026-08-29T00:00:00Z' },
+      { id: '\uE000', content: 'same time', publishedAt: '2026-08-29T00:00:00Z' },
+    ],
+  });
+  const state = applySuccessfulPoll(
+    createInitialState({ recoveryPending: true }),
+    normalized,
+    '2026-08-29T00:01:00.000Z',
+  );
+
+  expect(normalized.map(({ id }) => id)).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
+  expect(state.knownIds).toEqual(['z', '\u00e4', '\u{10000}', '\uE000']);
+  expect(state.unreadIds).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
+  expect(selectMenuPosts(state).map(({ id }) => id)).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
+});
 
 function acceptanceHarness(options: { baseline: Post[] }): Promise<AcceptanceHarness> {
   return createAcceptanceHarness(options);

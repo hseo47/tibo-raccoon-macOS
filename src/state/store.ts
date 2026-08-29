@@ -1,6 +1,7 @@
-import { chmod, mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { link, lstat, mkdir, open, readdir, realpath, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import type { RaccoonState } from '../domain';
@@ -38,25 +39,25 @@ export function defaultStatePaths(options: { testDirectory?: string } = {}): Sta
 }
 
 export async function loadState(paths: StatePaths): Promise<StateLoad> {
-  await ensureDirectory(paths);
-  const initial = await readState(paths);
-  if (initial.kind === 'existing' && !(await recoveryMarkerExists(paths))) return { state: initial.state, source: 'existing' };
-  if (initial.kind === 'missing' && !(await recoveryMarkerExists(paths))) return { state: createInitialState(), source: 'missing' };
+  const verifiedPaths = await ensureDirectory(paths);
+  const initial = await readState(verifiedPaths);
+  if (initial.kind === 'existing' && !(await recoveryMarkerExists(verifiedPaths))) return { state: initial.state, source: 'existing' };
+  if (initial.kind === 'missing' && !(await recoveryMarkerExists(verifiedPaths))) return { state: createInitialState(), source: 'missing' };
 
-  return withLock(paths, async () => {
-    const current = await readState(paths);
+  return withLock(verifiedPaths, async () => {
+    const current = await readState(verifiedPaths);
     if (current.kind === 'existing') {
-      await removeRecoveryMarker(paths);
+      await removeRecoveryMarker(verifiedPaths);
       return { state: current.state, source: 'existing' as const };
     }
-    if (current.kind === 'missing' && !(await recoveryMarkerExists(paths))) return { state: createInitialState(), source: 'missing' as const };
+    if (current.kind === 'missing' && !(await recoveryMarkerExists(verifiedPaths))) return { state: createInitialState(), source: 'missing' as const };
     if (current.kind === 'missing') {
       const state = createInitialState({ recoveryPending: true });
-      await writeState(paths, state);
-      await removeRecoveryMarker(paths);
+      await writeState(verifiedPaths, state);
+      await removeRecoveryMarker(verifiedPaths);
       return { state, source: 'recovered' as const };
     }
-    const state = await recoverCorruptState(paths);
+    const state = await recoverCorruptState(verifiedPaths);
     return { state, source: 'recovered' as const };
   });
 }
@@ -65,15 +66,15 @@ export async function mutateState(
   paths: StatePaths,
   mutation: (current: RaccoonState) => RaccoonState,
 ): Promise<RaccoonState> {
-  await ensureDirectory(paths);
-  return withLock(paths, async () => {
-    const loaded = await readState(paths);
+  const verifiedPaths = await ensureDirectory(paths);
+  return withLock(verifiedPaths, async () => {
+    const loaded = await readState(verifiedPaths);
     let current: RaccoonState;
     if (loaded.kind === 'existing') current = loaded.state;
     else if (loaded.kind === 'missing') {
-      current = (await recoveryMarkerExists(paths)) ? createInitialState({ recoveryPending: true }) : createInitialState();
+      current = (await recoveryMarkerExists(verifiedPaths)) ? createInitialState({ recoveryPending: true }) : createInitialState();
     }
-    else current = await recoverCorruptState(paths);
+    else current = await recoverCorruptState(verifiedPaths);
 
     let next: RaccoonState;
     try {
@@ -81,35 +82,75 @@ export async function mutateState(
     } catch {
       throw new StateStoreError('State update could not be saved');
     }
-    await writeState(paths, next);
-    await removeRecoveryMarker(paths);
+    await writeState(verifiedPaths, next);
+    await removeRecoveryMarker(verifiedPaths);
     return next;
   });
 }
 
-async function ensureDirectory(paths: StatePaths): Promise<void> {
+async function ensureDirectory(paths: StatePaths): Promise<StatePaths> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     await mkdir(paths.directory, { recursive: true, mode: DIRECTORY_MODE });
-    await chmod(paths.directory, DIRECTORY_MODE);
+    const entry = await lstat(paths.directory);
+    if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error('unsafe state directory');
+    handle = await open(paths.directory, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+    const opened = await handle.stat();
+    if (!opened.isDirectory() || opened.dev !== entry.dev || opened.ino !== entry.ino) throw new Error('state directory changed');
+    await handle.chmod(DIRECTORY_MODE);
+    const directory = await realpath(paths.directory);
+    const latest = await lstat(paths.directory);
+    if (latest.isSymbolicLink() || !latest.isDirectory() || latest.dev !== entry.dev || latest.ino !== entry.ino) throw new Error('state directory changed');
+    return defaultStatePaths({ testDirectory: directory });
   } catch {
     throw new StateStoreError('Private state storage is unavailable');
+  } finally {
+    if (handle !== undefined) await handle.close().catch(() => undefined);
+  }
+}
+
+type Artifact = {
+  kind: 'regular' | 'unsupported';
+  body: string | null;
+  modifiedAt: number;
+  dev: number;
+  ino: number;
+};
+
+async function inspectArtifact(path: string): Promise<Artifact | { kind: 'missing' }> {
+  let entry: Awaited<ReturnType<typeof lstat>>;
+  try { entry = await lstat(path); } catch (error) {
+    if (errorCode(error) === 'ENOENT') return { kind: 'missing' };
+    throw error;
+  }
+  const identity = { modifiedAt: entry.mtimeMs, dev: entry.dev, ino: entry.ino };
+  if (!entry.isFile() || entry.isSymbolicLink()) return { kind: 'unsupported', body: null, ...identity };
+
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.dev !== entry.dev || opened.ino !== entry.ino) throw new Error('artifact changed');
+    return { kind: 'regular', body: await handle.readFile('utf8'), ...identity };
+  } finally {
+    if (handle !== undefined) await handle.close().catch(() => undefined);
   }
 }
 
 type ReadResult = { kind: 'existing'; state: RaccoonState } | { kind: 'missing' } | { kind: 'corrupt' };
 
 async function readState(paths: StatePaths): Promise<ReadResult> {
-  let body: string;
   try {
-    body = await readFile(paths.stateFile, 'utf8');
+    const artifact = await inspectArtifact(paths.stateFile);
+    if (artifact.kind === 'missing') return { kind: 'missing' };
+    if (artifact.kind !== 'regular' || artifact.body === null) throw new Error('unsafe state artifact');
+    try {
+      return { kind: 'existing', state: parseState(JSON.parse(artifact.body)) };
+    } catch {
+      return { kind: 'corrupt' };
+    }
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') return { kind: 'missing' };
     throw new StateStoreError('Private state storage is unavailable');
-  }
-  try {
-    return { kind: 'existing', state: parseState(JSON.parse(body)) };
-  } catch {
-    return { kind: 'corrupt' };
   }
 }
 
@@ -125,8 +166,12 @@ async function recoverCorruptState(paths: StatePaths): Promise<RaccoonState> {
 function recoveryMarkerFile(paths: StatePaths): string { return `${paths.stateFile}.recovery`; }
 
 async function recoveryMarkerExists(paths: StatePaths): Promise<boolean> {
-  try { await stat(recoveryMarkerFile(paths)); return true; } catch (error) {
-    if (errorCode(error) === 'ENOENT') return false;
+  try {
+    const artifact = await inspectArtifact(recoveryMarkerFile(paths));
+    if (artifact.kind === 'missing') return false;
+    if (artifact.kind !== 'regular') throw new Error('unsafe recovery marker');
+    return true;
+  } catch {
     throw new StateStoreError('Private state storage is unavailable');
   }
 }
@@ -137,13 +182,12 @@ async function writeRecoveryMarker(paths: StatePaths): Promise<void> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(temporary, 'wx', FILE_MODE);
-    await chmod(temporary, FILE_MODE);
+    await handle.chmod(FILE_MODE);
     await handle.writeFile('recovery\n', 'utf8');
     await handle.sync();
     await handle.close();
     handle = undefined;
     await rename(temporary, marker);
-    await chmod(marker, FILE_MODE).catch(() => undefined);
   } catch {
     throw new StateStoreError('State recovery could not be saved');
   } finally {
@@ -160,7 +204,7 @@ async function quarantine(paths: StatePaths): Promise<void> {
   for (;;) {
     const target = join(paths.directory, `state.json.corrupt-${timestampForFilename(Date.now())}`);
     try {
-      await stat(target);
+      await lstat(target);
       await Bun.sleep(1);
       continue;
     } catch (error) {
@@ -185,14 +229,13 @@ async function writeState(paths: StatePaths, state: RaccoonState): Promise<void>
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(temporary, 'wx', FILE_MODE);
-    await chmod(temporary, FILE_MODE);
+    await handle.chmod(FILE_MODE);
     await handle.writeFile(`${JSON.stringify(state)}\n`, 'utf8');
     await handle.sync();
     await handle.close();
     handle = undefined;
     await rename(temporary, paths.stateFile);
-    // The temporary was already private; rename is the durable commit boundary.
-    await chmod(paths.stateFile, FILE_MODE).catch(() => undefined);
+    // The private temporary and same-directory rename are the durable commit boundary.
   } catch {
     throw new StateStoreError('State update could not be saved');
   } finally {
@@ -212,28 +255,19 @@ async function withLock<T>(paths: StatePaths, operation: () => Promise<T>): Prom
 
 async function acquireLock(paths: StatePaths): Promise<LockRecord> {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  const owner: LockRecord = { pid: process.pid, createdAt: new Date().toISOString(), token: randomUUID() };
+  await cleanupOwnerTemporaries(paths);
   for (;;) {
-    if (await reclaimMarkerExists(paths)) {
+    await recoverStaleReclaimClaim(paths);
+    if (await artifactExists(reclaimMarkerFile(paths))) {
       if (Date.now() >= deadline) throw new StateStoreError('State is temporarily busy');
       await Bun.sleep(LOCK_WAIT_MS);
       continue;
     }
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    let created = false;
+    const owner: LockRecord = { pid: process.pid, createdAt: new Date().toISOString(), token: randomUUID() };
     try {
-      handle = await open(paths.lockFile, 'wx', FILE_MODE);
-      created = true;
-      await chmod(paths.lockFile, FILE_MODE);
-      await handle.writeFile(JSON.stringify(owner), 'utf8');
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      return owner;
+      if (await publishOwnerRecord(paths.lockFile, owner)) return owner;
     } catch (error) {
-      if (handle !== undefined) await handle.close().catch(() => undefined);
-      if (created) await unlink(paths.lockFile).catch(() => undefined);
-      if (errorCode(error) !== 'EEXIST') throw new StateStoreError('Private state storage is unavailable');
+      throw new StateStoreError('Private state storage is unavailable');
     }
 
     await reclaimStaleLock(paths);
@@ -243,40 +277,114 @@ async function acquireLock(paths: StatePaths): Promise<LockRecord> {
 }
 
 async function reclaimStaleLock(paths: StatePaths): Promise<void> {
-  const claim = `${paths.lockFile}.reclaim`;
-  let claimHandle: Awaited<ReturnType<typeof open>> | undefined;
-  let claimed = false;
+  const claim = reclaimMarkerFile(paths);
+  const claimant: LockRecord = { pid: process.pid, createdAt: new Date().toISOString(), token: randomUUID() };
   try {
-    claimHandle = await open(claim, 'wx', FILE_MODE);
-    claimed = true;
-    await chmod(claim, FILE_MODE);
-    await claimHandle.writeFile(randomUUID(), 'utf8');
-    await claimHandle.sync();
+    if (!(await publishOwnerRecord(claim, claimant))) {
+      await recoverStaleReclaimClaim(paths);
+      return;
+    }
   } catch {
-    if (claimHandle !== undefined) await claimHandle.close().catch(() => undefined);
-    if (claimed) await unlink(claim).catch(() => undefined);
     return;
   }
-  if (claimHandle !== undefined) await claimHandle.close().catch(() => undefined);
   try {
-  let body: string;
-  try { body = await readFile(paths.lockFile, 'utf8'); } catch { return; }
-  const owner = parseLockRecord(body);
-  if (owner === null || Date.now() - Date.parse(owner.createdAt) <= LOCK_STALE_MS || !ownerIsDead(owner.pid)) return;
-  try {
-    const latest = await readFile(paths.lockFile, 'utf8');
-    if (parseLockRecord(latest)?.token === owner.token) await unlink(paths.lockFile);
+    const artifact = await inspectArtifact(paths.lockFile);
+    if (artifact.kind === 'missing') return;
+    const owner = artifact.kind === 'regular' && artifact.body !== null ? parseLockRecord(artifact.body) : null;
+    if (owner !== null) {
+      if (!recordIsStale(owner) || !ownerIsDead(owner.pid)) return;
+      await unlinkOwnedArtifact(paths.lockFile, owner);
+      return;
+    }
+    if (Date.now() - artifact.modifiedAt > LOCK_STALE_MS) await preserveAndDisplace(paths.lockFile, artifact);
   } catch {
-    // Another contender or owner changed the lock. It is safe to retry acquisition.
+    // The primary changed while the reclaim claim was held. A later contender retries safely.
+  } finally {
+    await unlinkOwnedArtifact(claim, claimant);
   }
-  } finally { await unlink(claim).catch(() => undefined); }
 }
 
-async function reclaimMarkerExists(paths: StatePaths): Promise<boolean> {
-  try { await stat(`${paths.lockFile}.reclaim`); return true; } catch (error) {
-    if (errorCode(error) === 'ENOENT') return false;
-    throw new StateStoreError('Private state storage is unavailable');
+function reclaimMarkerFile(paths: StatePaths): string {
+  return `${paths.lockFile}.reclaim`;
+}
+
+async function recoverStaleReclaimClaim(paths: StatePaths): Promise<void> {
+  const claim = reclaimMarkerFile(paths);
+  let artifact: Awaited<ReturnType<typeof inspectArtifact>>;
+  try { artifact = await inspectArtifact(claim); } catch { throw new StateStoreError('Private state storage is unavailable'); }
+  if (artifact.kind === 'missing') return;
+  const owner = artifact.kind === 'regular' && artifact.body !== null ? parseLockRecord(artifact.body) : null;
+  if (owner !== null) {
+    if (recordIsStale(owner) && ownerIsDead(owner.pid)) await unlinkOwnedArtifact(claim, owner);
+    return;
   }
+  if (Date.now() - artifact.modifiedAt > LOCK_STALE_MS) await preserveAndDisplace(claim, artifact);
+}
+
+async function publishOwnerRecord(path: string, owner: LockRecord): Promise<boolean> {
+  const temporary = `${path}.owner-${owner.token}`;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(temporary, 'wx', FILE_MODE);
+    await handle.chmod(FILE_MODE);
+    await handle.writeFile(JSON.stringify(owner), 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    try {
+      await link(temporary, path);
+      return true;
+    } catch (error) {
+      if (errorCode(error) === 'EEXIST') return false;
+      throw error;
+    }
+  } finally {
+    if (handle !== undefined) await handle.close().catch(() => undefined);
+    await unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function artifactExists(path: string): Promise<boolean> {
+  try { return (await inspectArtifact(path)).kind !== 'missing'; } catch { throw new StateStoreError('Private state storage is unavailable'); }
+}
+
+async function unlinkOwnedArtifact(path: string, owner: LockRecord): Promise<void> {
+  try {
+    const latest = await inspectArtifact(path);
+    if (latest.kind === 'regular' && latest.body !== null && parseLockRecord(latest.body)?.token === owner.token) await unlink(path);
+  } catch {
+    // Never remove an artifact whose current complete owner record is unknown.
+  }
+}
+
+async function preserveAndDisplace(path: string, artifact: Artifact): Promise<void> {
+  const latest = await lstat(path);
+  if (latest.dev !== artifact.dev || latest.ino !== artifact.ino) return;
+  await rename(path, `${path}.orphan-${randomUUID()}`);
+}
+
+async function cleanupOwnerTemporaries(paths: StatePaths): Promise<void> {
+  const lockName = basename(paths.lockFile);
+  const ownerTemporary = new RegExp(`^${lockName.replace('.', '\\.')}(?:\\.reclaim)?\\.owner-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, 'i');
+  let entries: string[];
+  try { entries = await readdir(paths.directory); } catch { throw new StateStoreError('Private state storage is unavailable'); }
+  for (const entry of entries) {
+    if (!ownerTemporary.test(entry)) continue;
+    const path = join(paths.directory, entry);
+    try {
+      const artifact = await inspectArtifact(path);
+      if (artifact.kind !== 'regular' || Date.now() - artifact.modifiedAt <= LOCK_STALE_MS) continue;
+      const owner = artifact.body === null ? null : parseLockRecord(artifact.body);
+      if (owner !== null && !ownerIsDead(owner.pid)) continue;
+      await unlink(path);
+    } catch {
+      // Narrow owner temporaries never block acquisition, so cleanup remains best effort.
+    }
+  }
+}
+
+function recordIsStale(owner: LockRecord): boolean {
+  return Date.now() - Date.parse(owner.createdAt) > LOCK_STALE_MS;
 }
 
 function ownerIsDead(pid: number): boolean {
@@ -289,12 +397,7 @@ function ownerIsDead(pid: number): boolean {
 }
 
 async function releaseLock(paths: StatePaths, owner: LockRecord): Promise<void> {
-  try {
-    const latest = parseLockRecord(await readFile(paths.lockFile, 'utf8'));
-    if (latest?.token === owner.token) await unlink(paths.lockFile);
-  } catch {
-    // Failure to clean up is retried by later contenders; never remove an unknown owner's lock.
-  }
+  await unlinkOwnedArtifact(paths.lockFile, owner);
 }
 
 function parseLockRecord(value: string): LockRecord | null {

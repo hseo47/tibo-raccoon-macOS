@@ -84,6 +84,23 @@ test('orders cached posts and unread IDs by timestamp descending then ID descend
   expect(state.unreadIds).toEqual(['z', 'b', 'a', 'none']);
 });
 
+test('uses UTF-16 opaque ID order for known IDs and equal or unavailable post ties', () => {
+  const state = applySuccessfulPoll(
+    createInitialState({ recoveryPending: true }),
+    [
+      post('z', { publishedAt: null }),
+      post('\u00e4', { publishedAt: null }),
+      post('\u{10000}', { publishedAt: first }),
+      post('\uE000', { publishedAt: first }),
+    ],
+    second,
+  );
+
+  expect(state.knownIds).toEqual(['z', '\u00e4', '\u{10000}', '\uE000']);
+  expect(state.cachedPosts.map(({ id }) => id)).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
+  expect(state.unreadIds).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
+});
+
 test('mark all read clears unread IDs but permanently retains known IDs', () => {
   const state = stateWith({ knownIds: ['1', '2'], unreadIds: ['2', '1'], cachedPosts: [post('2'), post('1')] });
   const read = markAllRead(state);

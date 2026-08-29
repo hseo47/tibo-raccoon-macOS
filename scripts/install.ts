@@ -6,17 +6,27 @@ import { basename, isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { promisify } from 'node:util';
 
-import { buildPlugin } from './build';
+import type { BuildOptions } from './build';
 import { hasUnsafeControl, printableOneLine } from './cli-output';
+import { isRepresentableSwiftBarPluginPath } from '../src/swiftbar/plugin-path';
 
 const ARTIFACT_NAME = 'tibo-raccoon.2m.js';
-const execFileAsync = promisify(execFile);
+const CONTRIBUTOR_DEPENDENCIES_MESSAGE = 'Contributor dependencies are missing; run `bun install` before installing the plugin';
+
+type BuildFunction = (options: BuildOptions) => Promise<void>;
+type MdfindExecutor = (
+  executable: string,
+  arguments_: readonly string[],
+  options: { encoding: 'utf8' },
+) => Promise<{ stdout: string }>;
+
+const execFileAsync = promisify(execFile) as MdfindExecutor;
 
 export type InstallDependencies = {
   platform: string;
   locateSwiftBar(): Promise<boolean>;
   isExecutable(path: string): Promise<boolean>;
-  build: typeof buildPlugin;
+  build: BuildFunction;
   stat(path: string): Promise<{ isDirectory(): boolean }>;
   makeTempDirectory(): Promise<string>;
   copyFile(source: string, destination: string): Promise<void>;
@@ -31,13 +41,13 @@ export async function installPlugin(options: {
   dependencies?: InstallDependencies;
 }): Promise<{ installedPath: string }> {
   const dependencies = options.dependencies ?? productionDependencies();
-  validateInstallInputs(options, dependencies);
+  const installedPath = join(options.pluginDirectory, ARTIFACT_NAME);
+  validateInstallInputs(options, installedPath, dependencies);
   await validatePrerequisites(options, dependencies);
 
   const temporaryDirectory = await dependencies.makeTempDirectory();
   if (!isAbsolute(temporaryDirectory)) throw new Error('Plugin installation failed');
   const builtArtifact = join(temporaryDirectory, ARTIFACT_NAME);
-  const installedPath = join(options.pluginDirectory, ARTIFACT_NAME);
   const stagedArtifact = join(options.pluginDirectory, `.${ARTIFACT_NAME}.install-${crypto.randomUUID()}`);
   let renamed = false;
   let stageOwnership: 'none' | 'pending' | 'owned' = 'none';
@@ -55,7 +65,8 @@ export async function installPlugin(options: {
     await dependencies.rename(stagedArtifact, installedPath);
     renamed = true;
     return { installedPath };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === CONTRIBUTOR_DEPENDENCIES_MESSAGE) throw error;
     throw new Error('Plugin installation failed');
   } finally {
     if (stageOwnership !== 'none' && !renamed) await dependencies.removeTempDirectory(stagedArtifact).catch(() => undefined);
@@ -68,9 +79,17 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === 'string' ? error.code : undefined;
 }
 
-function validateInstallInputs(options: { pluginDirectory: string; bunPath: string }, dependencies: InstallDependencies): void {
+function validateInstallInputs(
+  options: { pluginDirectory: string; bunPath: string },
+  installedPath: string,
+  dependencies: InstallDependencies,
+): void {
   if (dependencies.platform !== 'darwin') throw new Error('Plugin installation requires macOS');
-  if (!isAbsolute(options.pluginDirectory) || hasUnsafeControl(options.pluginDirectory)) {
+  if (
+    !isAbsolute(options.pluginDirectory) ||
+    !isRepresentableSwiftBarPluginPath(options.pluginDirectory) ||
+    !isRepresentableSwiftBarPluginPath(installedPath)
+  ) {
     throw new Error('SwiftBar plugin directory must be a safe absolute directory');
   }
   if (!isAbsolute(options.bunPath) || /\s/.test(options.bunPath)) {
@@ -97,7 +116,7 @@ function productionDependencies(): InstallDependencies {
     platform: process.platform,
     locateSwiftBar,
     isExecutable: isCurrentUserExecutableFile,
-    build: buildPlugin,
+    build: async (options) => (await loadBuildPlugin())(options),
     stat,
     makeTempDirectory: () => mkdtemp(join(tmpdir(), 'tibo-raccoon-build-')),
     copyFile: copyArtifactExclusively,
@@ -107,9 +126,18 @@ function productionDependencies(): InstallDependencies {
   };
 }
 
-async function locateSwiftBar(): Promise<boolean> {
+export async function loadBuildPlugin(): Promise<BuildFunction> {
   try {
-    const result = await execFileAsync('mdfind', ["kMDItemCFBundleIdentifier == 'com.ameba.SwiftBar'"], { encoding: 'utf8' });
+    await import('typescript');
+  } catch {
+    throw new Error(CONTRIBUTOR_DEPENDENCIES_MESSAGE);
+  }
+  return (await import('./build')).buildPlugin;
+}
+
+export async function locateSwiftBar(execute: MdfindExecutor = execFileAsync): Promise<boolean> {
+  try {
+    const result = await execute('/usr/bin/mdfind', ["kMDItemCFBundleIdentifier == 'com.ameba.SwiftBar'"], { encoding: 'utf8' });
     return result.stdout.trim() !== '';
   } catch {
     return false;
@@ -184,7 +212,7 @@ function readPluginDirectoryArgument(argv: readonly string[]): string | null {
 }
 
 function writeUsage(io: InstallCliIo): void {
-  io.stderr.write('Usage: bun run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
+  io.stderr.write('Usage: bun --no-install run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
   io.process.exitCode = 64;
 }
 

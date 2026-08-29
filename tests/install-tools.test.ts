@@ -1,12 +1,15 @@
 import { afterEach, expect, test } from 'bun:test';
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { copyArtifactExclusively, isCurrentUserExecutableFile, type InstallDependencies, installPlugin, runInstallCli } from '../scripts/install';
+import { copyArtifactExclusively, isCurrentUserExecutableFile, type InstallDependencies, installPlugin, locateSwiftBar, runInstallCli } from '../scripts/install';
 import { type UninstallDependencies, runUninstallCli, uninstallPlugin } from '../scripts/uninstall';
-import { buildPlugin } from '../scripts/build';
+import type { BuildOptions } from '../scripts/build';
+import { resolvePluginPath } from '../src/main';
+
+type BuildFunction = (options: BuildOptions) => Promise<void>;
 
 type InstallHarness = {
   pluginDirectory: string;
@@ -55,6 +58,38 @@ test('install accepts an absolute plugin directory containing spaces', async () 
   await installPlugin({ pluginDirectory: harness.pluginDirectory, bunPath: harness.bunPath, dependencies: harness.dependencies });
   expect(await Bun.file(join(harness.pluginDirectory, 'tibo-raccoon.2m.js')).exists()).toBe(true);
   await assertHarnessOperationsStayInRoot(harness);
+});
+
+test('every accepted install path is immediately usable as the runtime SwiftBar action path', async () => {
+  for (const pluginDirectoryName of ['SwiftBar Plugins', "SwiftBar ' Plugins", 'SwiftBar " Plugins']) {
+    const harness = await installHarness({ pluginDirectoryName });
+    const result = await installPlugin({
+      pluginDirectory: harness.pluginDirectory,
+      bunPath: harness.bunPath,
+      dependencies: harness.dependencies,
+    });
+    expect(resolvePluginPath({}, result.installedPath)).toBe(result.installedPath);
+  }
+});
+
+test('unrepresentable install paths fail before discovery, build, or filesystem mutation', async () => {
+  const harness = await installHarness();
+  const rejectedPluginDirectories = [
+    'relative/plugins',
+    `${harness.pluginDirectory}|pipe`,
+    `${harness.pluginDirectory}\\`,
+    `${harness.pluginDirectory}/both'"quotes`,
+    ...['\n', '\u0001', '\u0085', '\u2028', '\u2029'].map((control) => `${harness.pluginDirectory}${control}control`),
+  ];
+
+  for (const pluginDirectory of rejectedPluginDirectories) {
+    await expect(installPlugin({
+      pluginDirectory,
+      bunPath: harness.bunPath,
+      dependencies: harness.dependencies,
+    })).rejects.toThrow('safe absolute directory');
+    expect(harnessOperations(harness)).toEqual([]);
+  }
 });
 
 test('install rejects unavailable prerequisites and unsafe paths before copying', async () => {
@@ -205,23 +240,23 @@ test('install CLI uses explicit arguments, prompts only on both TTYs, and reject
 
   const empty = cliWriter();
   await runInstallCli([], { ...empty.io, install, bunPath: '/tmp/bun', stdinIsTTY: true, stdoutIsTTY: true, prompt: async () => '   ' });
-  expect(empty.stderr).toBe('Usage: bun run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
+  expect(empty.stderr).toBe('Usage: bun --no-install run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
   expect(empty.io.process.exitCode).toBe(64);
 
   const invalid = cliWriter();
   await runInstallCli([], { ...invalid.io, install, bunPath: '/tmp/bun', stdinIsTTY: true, stdoutIsTTY: true, prompt: async () => 'relative/plugins' });
-  expect(invalid.stderr).toBe('Usage: bun run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
+  expect(invalid.stderr).toBe('Usage: bun --no-install run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
   expect(invalid.io.process.exitCode).toBe(64);
   expect(calls).toEqual(['/tmp/explicit', '/tmp/interactive']);
 
   const nonTty = cliWriter();
   await runInstallCli([], { ...nonTty.io, install, bunPath: '/tmp/bun', stdinIsTTY: false, stdoutIsTTY: true, prompt: async () => { throw new Error('must not prompt'); } });
-  expect(nonTty.stderr).toBe('Usage: bun run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
+  expect(nonTty.stderr).toBe('Usage: bun --no-install run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
   expect(nonTty.io.process.exitCode).toBe(64);
 
   const outputNotTty = cliWriter();
   await runInstallCli([], { ...outputNotTty.io, install, bunPath: '/tmp/bun', stdinIsTTY: true, stdoutIsTTY: false, prompt: async () => { throw new Error('must not prompt'); } });
-  expect(outputNotTty.stderr).toBe('Usage: bun run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
+  expect(outputNotTty.stderr).toBe('Usage: bun --no-install run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"\n');
   expect(outputNotTty.io.process.exitCode).toBe(64);
 });
 
@@ -329,6 +364,98 @@ test('fresh child imports are fetch-fail-closed and do not add files to their ac
   }
 });
 
+test('production SwiftBar discovery executes only the absolute system mdfind with fixed arguments', async () => {
+  const calls: Array<{ executable: string; arguments_: readonly string[]; options: { encoding: string } }> = [];
+  const found = await locateSwiftBar(async (executable, arguments_, options) => {
+    calls.push({ executable, arguments_, options });
+    return { stdout: '/Applications/SwiftBar.app\n' };
+  });
+
+  expect(found).toBe(true);
+  expect(calls).toEqual([{
+    executable: '/usr/bin/mdfind',
+    arguments_: ["kMDItemCFBundleIdentifier == 'com.ameba.SwiftBar'"],
+    options: { encoding: 'utf8' },
+  }]);
+});
+
+test('fresh no-install checkout fails closed on missing contributor dependencies', async () => {
+  const childRoot = await mkdtemp(join(tmpdir(), 'tibo-raccoon-no-install-'));
+  harnessRoots.push(childRoot);
+  const checkout = join(childRoot, 'checkout');
+  const childHome = join(childRoot, 'home');
+  const childTmp = join(childRoot, 'tmp');
+  const childCache = join(childRoot, 'cache');
+  await cp(process.cwd(), checkout, {
+    recursive: true,
+    filter: (source) => {
+      const sourceRelative = relative(process.cwd(), source);
+      const firstSegment = sourceRelative.split(sep)[0];
+      return !['.git', '.superpowers', 'node_modules', 'dist'].includes(firstSegment ?? '') &&
+        !firstSegment?.startsWith('bun.lock');
+    },
+  });
+  await Promise.all([mkdir(childHome), mkdir(childTmp), mkdir(childCache)]);
+  const packageBefore = await readFile(join(checkout, 'package.json'), 'utf8');
+  const environment = {
+    ...process.env,
+    HOME: childHome,
+    TMPDIR: childTmp,
+    BUN_INSTALL_CACHE_DIR: childCache,
+    PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`,
+    npm_config_registry: 'http://127.0.0.1:9',
+  };
+
+  const packageRun = await runChild(
+    [process.execPath, '--no-install', 'run', 'install:plugin', '--', '--unsupported'],
+    checkout,
+    environment,
+  );
+  expect(packageRun.exitCode).toBe(64);
+  expect(packageRun.stdout).toBe('');
+  expect(packageRun.stderr).toContain('Usage: bun --no-install run install:plugin -- --plugin-dir "/absolute/SwiftBar plugins"');
+  expect(packageRun.stderr).not.toContain('typescript');
+
+  const probe = join(checkout, 'installer-lazy-loader-probe.ts');
+  await writeFile(probe, [
+    "const installer = await import('./scripts/install.ts');",
+    'const events: string[] = [];',
+    'try {',
+    '  await installer.installPlugin({',
+    '    pluginDirectory: process.cwd(),',
+    '    bunPath: process.execPath,',
+    '    dependencies: {',
+    "      platform: 'darwin',",
+    "      locateSwiftBar: async () => { events.push('locate'); return true; },",
+    "      isExecutable: async () => { events.push('executable'); return true; },",
+    "      build: async (options) => { events.push('build'); return (await installer.loadBuildPlugin())(options); },",
+    "      stat: async () => { events.push('stat'); return { isDirectory: () => true }; },",
+    "      makeTempDirectory: async () => { events.push('temporary'); return process.cwd(); },",
+    "      copyFile: async () => { events.push('copy'); throw new Error('copy must not run'); },",
+    "      chmod: async () => { events.push('chmod'); throw new Error('chmod must not run'); },",
+    "      rename: async () => { events.push('rename'); throw new Error('rename must not run'); },",
+    "      removeTempDirectory: async () => { events.push('cleanup'); },",
+    '    },',
+    '  });',
+    "  throw new Error('expected missing contributor dependencies');",
+    '} catch (error) {',
+    "  if (events.join(',') !== 'locate,executable,stat,temporary,build,cleanup') throw new Error(`unexpected events: ${events.join(',')}`);",
+    "  process.stderr.write(`${error instanceof Error ? error.message : 'unknown error'}\\n`);",
+    '  process.exitCode = 1;',
+    '}',
+    '',
+  ].join('\n'));
+  const loaderRun = await runChild([process.execPath, '--no-install', 'run', probe], checkout, environment);
+  expect(loaderRun.exitCode).toBe(1);
+  expect(loaderRun.stdout).toBe('');
+  expect(loaderRun.stderr).toBe('Contributor dependencies are missing; run `bun install` before installing the plugin\n');
+
+  expect(await Bun.file(join(checkout, 'node_modules')).exists()).toBe(false);
+  expect((await readdir(checkout)).filter((entry) => entry.startsWith('bun.lock'))).toEqual([]);
+  expect(await readFile(join(checkout, 'package.json'), 'utf8').then((value) => value === packageBefore)).toBe(true);
+  expect(await snapshotRuntimeTrees(childCache)).toEqual([[]]);
+});
+
 async function installHarness(options: {
   pluginDirectoryName?: string;
   rename?: InstallDependencies['rename'];
@@ -349,13 +476,13 @@ async function installHarness(options: {
   const record = (operation: string, ...paths: string[]) => { operations.push({ operation, paths }); };
   const dependencies: InstallDependencies = {
     platform: 'darwin',
-    locateSwiftBar: async () => true,
+    locateSwiftBar: async () => { record('locateSwiftBar'); return true; },
     isExecutable: async (path) => { record('isExecutable', path); return path === bunPath; },
-    build: (async ({ output }: Parameters<typeof buildPlugin>[0]) => {
+    build: (async ({ output }: BuildOptions) => {
       record('build', output);
       if (options.failure === 'build') throw new Error('build failure');
       await writeFile(output, '#!/fake/bun\nartifact\n', { mode: 0o755 });
-    }) as typeof buildPlugin,
+    }) as BuildFunction,
     stat: async (path) => { record('stat', path); return stat(path); },
     makeTempDirectory: async () => {
       const directory = await mkdtemp(join(root, 'build-'));
@@ -440,6 +567,17 @@ async function runFreshGuardedImport(modulePath: string, environment: Record<str
 
 async function snapshotRuntimeTrees(...directories: string[]): Promise<string[][]> {
   return Promise.all(directories.map(async (directory) => (await readdir(directory, { recursive: true })).sort()));
+}
+
+async function runChild(
+  command: readonly string[],
+  cwd: string,
+  environment: Record<string, string | undefined>,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn([...command], { cwd, env: environment, stdout: 'pipe', stderr: 'pipe' });
+  const stdout = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
+  return { exitCode: await exitWithin(child, 5_000), stdout: await stdout, stderr: await stderr };
 }
 
 afterEach(async () => {

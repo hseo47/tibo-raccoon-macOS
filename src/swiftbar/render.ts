@@ -1,5 +1,5 @@
 import { ICON_BASE64 } from '../generated/icons';
-import { PROFILE_URL, type IconState, type Post, type RaccoonState, type RuntimeNotice } from '../domain';
+import { compareOpaqueIds, PROFILE_URL, type IconState, type Post, type RaccoonState, type RuntimeNotice } from '../domain';
 import { quoteSwiftBarPluginPath } from './plugin-path';
 
 const DEFAULT_WRAP_WIDTH = 72;
@@ -108,5 +108,5 @@ function comparePostsNewestFirst(left: Post, right: Post): number {
   if (left.publishedAt !== null && right.publishedAt !== null && left.publishedAt !== right.publishedAt) {
     return left.publishedAt > right.publishedAt ? -1 : 1;
   }
-  return left.id === right.id ? 0 : left.id > right.id ? -1 : 1;
+  return compareOpaqueIds(right.id, left.id);
 }

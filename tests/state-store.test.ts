@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { RaccoonState } from '../src/domain';
@@ -17,6 +17,20 @@ async function faultChild(statePaths: Awaited<ReturnType<typeof tempStatePaths>>
   return JSON.parse(await readFile(join(statePaths.directory, 'fault-result.json'), 'utf8'));
 }
 async function waitFor(path: string): Promise<void> { for (let i = 0; i < 200; i += 1) { try { await stat(path); return; } catch { await Bun.sleep(5); } } throw new Error('fault child did not signal'); }
+async function ageLockArtifacts(directory: string): Promise<void> {
+  const stale = new Date(Date.now() - 31_000);
+  for (const name of await readdir(directory)) {
+    if (!name.startsWith('state.lock')) continue;
+    const path = join(directory, name);
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      if (typeof parsed.createdAt === 'string') await writeFile(path, JSON.stringify({ ...parsed, createdAt: stale.toISOString() }));
+    } catch {
+      // Incomplete and legacy crash residue is aged by metadata alone.
+    }
+    await utimes(path, stale, stale);
+  }
+}
 
 afterEach(async () => { await Promise.all(pathsToClean.splice(0).map(cleanupTempState)); });
 
@@ -33,11 +47,60 @@ describe('private state paths and writes', () => {
     await expect(stat(statePaths.stateFile)).rejects.toThrow();
   });
 
+  test('rejects a symlinked production-shaped state root without touching its target', async () => {
+    const root = await paths();
+    const target = join(root.directory, 'unrelated-target');
+    const stateDirectory = join(root.directory, 'Tibo Raccoon');
+    const sentinel = join(target, 'sentinel.txt');
+    await mkdir(target, { mode: 0o755 });
+    await chmod(target, 0o755);
+    await writeFile(sentinel, 'unchanged\n', { mode: 0o644 });
+    await symlink(target, stateDirectory);
+    const redirected = defaultStatePaths({ testDirectory: stateDirectory });
+
+    await expect(mutateState(redirected, (current) => ({ ...current, knownIds: ['must-not-write'] }))).rejects.toBeInstanceOf(StateStoreError);
+
+    expect((await stat(target)).mode & 0o777).toBe(0o755);
+    expect(await readFile(sentinel, 'utf8')).toBe('unchanged\n');
+    await expect(lstat(join(target, 'state.json'))).rejects.toThrow();
+    expect((await lstat(stateDirectory)).isSymbolicLink()).toBe(true);
+  });
+
+  test('rejects a symlinked state artifact without reading or replacing its target', async () => {
+    const statePaths = await paths();
+    const target = join(statePaths.directory, 'unrelated-state.json');
+    const content = `${JSON.stringify(createInitialState())}\n`;
+    await writeFile(target, content, { mode: 0o644 });
+    await symlink(target, statePaths.stateFile);
+
+    await expect(loadState(statePaths)).rejects.toBeInstanceOf(StateStoreError);
+
+    expect(await readFile(target, 'utf8')).toBe(content);
+    expect((await stat(target)).mode & 0o777).toBe(0o644);
+    expect((await lstat(statePaths.stateFile)).isSymbolicLink()).toBe(true);
+  });
+
+  test('rejects a non-directory state root without changing its bytes or mode', async () => {
+    const root = await paths();
+    const stateDirectory = join(root.directory, 'Tibo Raccoon');
+    await writeFile(stateDirectory, 'not a directory\n', { mode: 0o644 });
+    const redirected = defaultStatePaths({ testDirectory: stateDirectory });
+
+    await expect(loadState(redirected)).rejects.toBeInstanceOf(StateStoreError);
+
+    expect(await readFile(stateDirectory, 'utf8')).toBe('not a directory\n');
+    expect((await stat(stateDirectory)).mode & 0o777).toBe(0o644);
+  });
+
   test('atomically writes private state and leaves no temporary or lock files', async () => {
     const statePaths = await paths(); let start!: () => void; let release!: () => void;
     const started = new Promise<void>((resolve) => { start = resolve; }); const finish = new Promise<void>((resolve) => { release = resolve; });
     const mutation = mutateState(statePaths, (async (current: RaccoonState) => { start(); await finish; return { ...current, knownIds: ['persisted'] }; }) as unknown as (current: RaccoonState) => RaccoonState);
-    await started; expect(await mode(statePaths.lockFile)).toBe(0o600); release(); await mutation;
+    await started;
+    expect(await mode(statePaths.lockFile)).toBe(0o600);
+    const visibleOwner = JSON.parse(await readFile(statePaths.lockFile, 'utf8')) as Record<string, unknown>;
+    expect(visibleOwner).toEqual({ pid: process.pid, createdAt: expect.any(String), token: expect.any(String) });
+    release(); await mutation;
     expect(await mode(statePaths.stateFile)).toBe(0o600);
     expect((await readdir(statePaths.directory)).filter((name) => name.includes('.tmp-'))).toEqual([]);
     await expect(stat(statePaths.lockFile)).rejects.toThrow();
@@ -65,7 +128,7 @@ describe('isolated filesystem fault handling', () => {
 
   test('keeps the committed state when post-rename chmod fails', async () => {
     const statePaths = await paths(); const result = await faultChild(statePaths, 'post-rename-chmod');
-    expect(result).toMatchObject({ threw: false, fired: true, renamed: true });
+    expect(result).toMatchObject({ threw: false, fired: false, renamed: true });
     expect((await loadState(statePaths)).state.knownIds).toEqual(['new']);
     expect(await mode(statePaths.stateFile)).toBe(0o600);
   });
@@ -151,6 +214,15 @@ describe('owner-aware locking', () => {
     const statePaths = await paths(); await writeFile(statePaths.lockFile, lockRecord(999_999, new Date().toISOString()), { mode: 0o600 });
     await expect(mutateState(statePaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError); await expect(stat(statePaths.stateFile)).rejects.toThrow();
   });
+  test('does not remove a live-owner reclaim claim even when its timestamp is old', async () => {
+    const statePaths = await paths();
+    const claim = `${statePaths.lockFile}.reclaim`;
+    await writeFile(claim, lockRecord(process.pid, new Date(Date.now() - 31_000).toISOString(), 'live-claim'), { mode: 0o600 });
+
+    await expect(mutateState(statePaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError);
+
+    expect(JSON.parse(await readFile(claim, 'utf8')).token).toBe('live-claim');
+  });
   test('times out after two seconds without changing state', async () => {
     const statePaths = await paths(); await mutateState(statePaths, (current) => ({ ...current, knownIds: ['before'] })); await writeFile(statePaths.lockFile, lockRecord(process.pid, new Date().toISOString()), { mode: 0o600 }); const started = Date.now();
     await expect(mutateState(statePaths, (current) => ({ ...current, knownIds: ['after'] }))).rejects.toBeInstanceOf(StateStoreError); expect(Date.now() - started).toBeGreaterThanOrEqual(1_900); expect(Date.now() - started).toBeLessThan(2_500); expect((await loadState(statePaths)).state.knownIds).toEqual(['before']);
@@ -164,14 +236,72 @@ describe('owner-aware locking', () => {
     expect((await loadState(statePaths)).state.knownIds).toEqual(['stale-one', 'stale-two']);
     expect((await readdir(statePaths.directory)).filter((name) => name.includes('.reclaim'))).toEqual([]);
   });
-  test('bounds a leaked reclaim marker without changing state', async () => {
-    const statePaths = await paths(); await loadState(statePaths); await writeFile(`${statePaths.lockFile}.reclaim`, 'leaked', { mode: 0o600 }); const started = Date.now();
-    await expect(mutateState(statePaths, (current) => ({ ...current, knownIds: ['never'] }))).rejects.toBeInstanceOf(StateStoreError);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(1_900); expect(Date.now() - started).toBeLessThan(2_500); await unlink(`${statePaths.lockFile}.reclaim`); expect((await loadState(statePaths)).state.knownIds).toEqual([]);
+  test('recovers an incomplete primary lock left by an abrupt process exit', async () => {
+    const statePaths = await paths();
+    const child = Bun.spawn([process.execPath, join(process.cwd(), 'tests/helpers/state-store-fault-child.ts'), 'crash-primary-create', statePaths.directory]);
+    expect(await child.exited).toBe(86);
+    await ageLockArtifacts(statePaths.directory);
+
+    const recovered = await mutateState(statePaths, (current) => ({ ...current, knownIds: ['automatic'] }));
+
+    expect(recovered.knownIds).toEqual(['automatic']);
+    expect((await readdir(statePaths.directory)).filter((name) => name.startsWith('state.lock'))).toEqual([]);
+  });
+  test('preserves displaced malformed legacy lock bytes while recovering automatically', async () => {
+    const statePaths = await paths();
+    await writeFile(statePaths.lockFile, 'legacy-incomplete-owner', { mode: 0o600 });
+    await ageLockArtifacts(statePaths.directory);
+
+    const recovered = await mutateState(statePaths, (current) => ({ ...current, knownIds: ['legacy-recovered'] }));
+    const orphan = (await readdir(statePaths.directory)).find((entry) => /^state\.lock\.orphan-[0-9a-f-]{36}$/i.test(entry));
+
+    expect(recovered.knownIds).toEqual(['legacy-recovered']);
+    expect(orphan).toBeDefined();
+    expect(await readFile(join(statePaths.directory, orphan!), 'utf8')).toBe('legacy-incomplete-owner');
+  });
+  test('recovers a leaked reclaim claim after its owner dies and it becomes stale', async () => {
+    const statePaths = await paths();
+    await writeFile(statePaths.lockFile, lockRecord(999_999, new Date(Date.now() - 31_000).toISOString()), { mode: 0o600 });
+    const child = Bun.spawn([process.execPath, join(process.cwd(), 'tests/helpers/state-store-fault-child.ts'), 'crash-reclaim-claim', statePaths.directory]);
+    expect(await child.exited).toBe(87);
+    const leakedClaim = JSON.parse(await readFile(`${statePaths.lockFile}.reclaim`, 'utf8')) as Record<string, unknown>;
+    expect(leakedClaim).toEqual({ pid: expect.any(Number), createdAt: expect.any(String), token: expect.any(String) });
+    expect(await mode(`${statePaths.lockFile}.reclaim`)).toBe(0o600);
+    await ageLockArtifacts(statePaths.directory);
+
+    const recovered = await mutateState(statePaths, (current) => ({ ...current, knownIds: ['automatic'] }));
+
+    expect(recovered.knownIds).toEqual(['automatic']);
+    expect((await readdir(statePaths.directory)).filter((name) => name.startsWith('state.lock'))).toEqual([]);
+  });
+  test('preserves displaced malformed legacy reclaim bytes while recovering automatically', async () => {
+    const statePaths = await paths();
+    const claim = `${statePaths.lockFile}.reclaim`;
+    await writeFile(claim, 'legacy-reclaim-token', { mode: 0o600 });
+    await ageLockArtifacts(statePaths.directory);
+
+    const recovered = await mutateState(statePaths, (current) => ({ ...current, knownIds: ['legacy-claim-recovered'] }));
+    const orphan = (await readdir(statePaths.directory)).find((entry) => /^state\.lock\.reclaim\.orphan-[0-9a-f-]{36}$/i.test(entry));
+
+    expect(recovered.knownIds).toEqual(['legacy-claim-recovered']);
+    expect(orphan).toBeDefined();
+    expect(await readFile(join(statePaths.directory, orphan!), 'utf8')).toBe('legacy-reclaim-token');
   });
   test('does not remove a replacement lock owned by another token', async () => {
     const statePaths = await paths(); let replace!: () => void; let finish!: () => void; const ready = new Promise<void>((resolve) => { replace = resolve; }); const allowed = new Promise<void>((resolve) => { finish = resolve; });
     const mutation = mutateState(statePaths, (async (current: RaccoonState) => { replace(); await allowed; return current; }) as unknown as (current: RaccoonState) => RaccoonState); await ready; await writeFile(statePaths.lockFile, lockRecord(process.pid, new Date().toISOString(), 'replacement-token'), { mode: 0o600 }); finish(); await mutation;
     expect(JSON.parse(await readFile(statePaths.lockFile, 'utf8')).token).toBe('replacement-token'); await unlink(statePaths.lockFile);
+  });
+  test('does not follow a lock symlink or alter its target', async () => {
+    const statePaths = await paths();
+    const target = join(statePaths.directory, 'unrelated-lock-target');
+    await writeFile(target, 'outside-lock-content', { mode: 0o644 });
+    await symlink(target, statePaths.lockFile);
+
+    await expect(mutateState(statePaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError);
+
+    expect(await readFile(target, 'utf8')).toBe('outside-lock-content');
+    expect((await stat(target)).mode & 0o777).toBe(0o644);
+    expect((await lstat(statePaths.lockFile)).isSymbolicLink()).toBe(true);
   });
 });

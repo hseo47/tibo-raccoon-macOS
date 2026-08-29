@@ -1,11 +1,14 @@
 import { constants } from 'node:fs';
-import { access, chmod, mkdir, open, rename, stat } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, open, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import * as ts from 'typescript';
 
 import { ICON_BASE64, ICON_SHA256 } from '../src/generated/icons';
 
 const ARTIFACT_NAME = 'tibo-raccoon.2m.js';
+const TEST_STATE_MARKER = '.tibo-raccoon-test-state';
+const TEST_STATE_MARKER_CONTENT = 'tibo-raccoon-test-state-v1\n';
 const ALLOWED_RUNTIME_IMPORTS = new Set([
   'crypto',
   'fs',
@@ -34,7 +37,7 @@ export async function buildPlugin(options: BuildOptions): Promise<void> {
   await validateBunPath(options.bunPath);
 
   const bundled = await bundleMain();
-  const source = `${metadataFor(options.bunPath)}${integrityComment()}${bundled}`;
+  const source = `${metadataFor(options.bunPath)}${bundled}`;
   await writeArtifact(options.output, source);
   await verifyArtifact(options.output, options.bunPath);
 }
@@ -108,16 +111,6 @@ export function assertAllowedRuntimeImports(source: string): void {
   }
 }
 
-function integrityComment(): string {
-  const entries: string[] = [];
-  for (const state of ['calm', 'unread', 'offline'] as const) {
-    for (const appearance of ['light', 'dark'] as const) {
-      entries.push(`${state}.${appearance} sha256=${ICON_SHA256[state][appearance]} base64=${ICON_BASE64[state][appearance]}`);
-    }
-  }
-  return `// tibo-raccoon-icon-integrity ${entries.join(' | ')}\n`;
-}
-
 async function writeArtifact(output: string, source: string): Promise<void> {
   const temporary = join(dirname(output), `.${ARTIFACT_NAME}.tmp-${crypto.randomUUID()}`);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -138,7 +131,7 @@ async function writeArtifact(output: string, source: string): Promise<void> {
   }
 }
 
-async function verifyArtifact(output: string, bunPath: string): Promise<void> {
+export async function verifyArtifact(output: string, bunPath: string): Promise<void> {
   const file = Bun.file(output);
   const source = await file.text();
   if (
@@ -152,12 +145,114 @@ async function verifyArtifact(output: string, bunPath: string): Promise<void> {
   assertAllowedRuntimeImports(source);
   for (const state of ['calm', 'unread', 'offline'] as const) {
     for (const appearance of ['light', 'dark'] as const) {
-      if (!source.includes(ICON_BASE64[state][appearance]) || !source.includes(ICON_SHA256[state][appearance])) {
+      if (!source.includes(ICON_BASE64[state][appearance])) {
         throw new Error('Plugin artifact verification failed');
       }
     }
   }
   if (((await stat(output)).mode & 0o777) !== 0o755) throw new Error('Plugin artifact verification failed');
+
+  const emitted = new Set<string>();
+  for (const state of ['calm', 'unread', 'offline'] as const) {
+    const images = await executeArtifactForVerification(output, state);
+    for (const appearance of ['light', 'dark'] as const) {
+      const encoded = images[appearance];
+      emitted.add(encoded);
+      const hash = new Bun.CryptoHasher('sha256').update(Buffer.from(encoded, 'base64')).digest('hex');
+      if (hash !== ICON_SHA256[state][appearance]) throw new Error('Plugin artifact verification failed');
+    }
+  }
+  if (emitted.size !== 6) throw new Error('Plugin artifact verification failed');
+}
+
+async function executeArtifactForVerification(
+  output: string,
+  iconState: 'calm' | 'unread' | 'offline',
+): Promise<{ light: string; dark: string }> {
+  const executionRoot = await mkdtemp(join(tmpdir(), 'tibo-raccoon-build-verify-'));
+  const home = join(executionRoot, 'home');
+  const childTmp = join(executionRoot, 'tmp');
+  const fallbackDirectory = join(home, 'Library', 'Application Support', 'Tibo Raccoon');
+  try {
+    await mkdir(home, { mode: 0o700 });
+    await mkdir(childTmp, { mode: 0o700 });
+    await mkdir(fallbackDirectory, { recursive: true, mode: 0o700 });
+    const stateDirectory = await mkdtemp(join(childTmp, 'tibo-raccoon-state-'));
+    const stateBody = `${JSON.stringify(canonicalVerificationState(iconState))}\n`;
+    await writeFile(join(stateDirectory, TEST_STATE_MARKER), TEST_STATE_MARKER_CONTENT, { mode: 0o600 });
+    await writeFile(join(stateDirectory, 'state.json'), stateBody, { mode: 0o600 });
+    await writeFile(join(fallbackDirectory, 'state.json'), stateBody, { mode: 0o600 });
+
+    const child = Bun.spawn([output], {
+      env: {
+        HOME: home,
+        TMPDIR: childTmp,
+        TIBO_RACCOON_TEST_MODE: '1',
+        TIBO_RACCOON_TEST_STATE_DIR: stateDirectory,
+        SWIFTBAR_PLUGIN_PATH: output,
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const exitCode = await awaitChildExit(child, 5_000);
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (exitCode !== 0 || stderr !== '') throw new Error('Plugin artifact verification failed');
+    const header = stdout.split('\n', 1)[0] ?? '';
+    const match = /^\| image=([^,\s]+),([^\s]+) dropdown=false$/.exec(header);
+    if (match === null || match[1] === undefined || match[2] === undefined) {
+      throw new Error('Plugin artifact verification failed');
+    }
+    return { light: match[1], dark: match[2] };
+  } catch {
+    throw new Error('Plugin artifact verification failed');
+  } finally {
+    await rm(executionRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+function canonicalVerificationState(iconState: 'calm' | 'unread' | 'offline'): object {
+  const unread = iconState === 'unread';
+  return {
+    version: 1,
+    initializedAt: '2026-08-30T00:00:00.000Z',
+    recoveryPending: false,
+    knownIds: unread ? ['new-post'] : [],
+    unreadIds: unread ? ['new-post'] : [],
+    cachedPosts: unread ? [{
+      id: 'new-post',
+      text: 'new post',
+      publishedAt: '2026-08-30T00:01:00.000Z',
+      url: 'https://x.com/thsottiaux/status/new-post',
+    }] : [],
+    lastAttemptAt: '9999-12-31T23:59:58.000Z',
+    lastSuccessAt: '2026-08-30T00:00:00.000Z',
+    consecutiveFailures: iconState === 'offline' ? 3 : 0,
+    nextRetryAt: '9999-12-31T23:59:59.999Z',
+    lastError: iconState === 'offline' ? 'network' : null,
+  };
+}
+
+async function awaitChildExit(child: ReturnType<typeof Bun.spawn>, timeoutMs: number): Promise<number> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      child.exited.then((exitCode) => ({ timedOut: false as const, exitCode })),
+      new Promise<{ timedOut: true }>((resolve) => {
+        timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+      }),
+    ]);
+    if (!result.timedOut) return result.exitCode;
+
+    child.kill(9);
+    const killed = await Promise.race([
+      child.exited.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ]);
+    if (!killed) throw new Error('Plugin artifact verification failed');
+    throw new Error('Plugin artifact verification failed');
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 if (import.meta.main) {
