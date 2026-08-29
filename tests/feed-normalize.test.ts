@@ -41,6 +41,12 @@ describe('normalizeDayclawPayload', () => {
     ]);
   });
 
+  test('normalizes an item with absent text fields to empty text', () => {
+    expect(normalizeDayclawPayload({ items: [{ id: 'absent-text' }] })).toEqual([
+      { id: 'absent-text', text: '', publishedAt: null, url: null },
+    ]);
+  });
+
   test('rejects non-objects, missing IDs, oversized item lists, and oversized text', () => {
     expect(() => normalizeDayclawPayload({ items: [null] })).toThrow(PayloadError);
     expect(() => normalizeDayclawPayload({ items: [{ content: 'missing ID' }] })).toThrow(PayloadError);
@@ -65,6 +71,7 @@ describe('normalizeDayclawPayload', () => {
 
 test('accepts only strict timezone-bearing RFC 3339', () => {
   expect(parseRfc3339('2026-08-29T12:34:56+08:00')).toBe('2026-08-29T04:34:56.000Z');
+  expect(parseRfc3339('0000-02-29T12:34:56Z')).toBe('0000-02-29T12:34:56.000Z');
   expect(parseRfc3339('2026-02-30T12:34:56Z')).toBeNull();
   expect(parseRfc3339('2026-08-29 12:34:56')).toBeNull();
 });
