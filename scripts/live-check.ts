@@ -1,4 +1,5 @@
 import { fetchDayclawPosts } from '../src/feed/client';
+import { printableOneLine } from './cli-output';
 
 export async function runLiveCheck(options: {
   fetchPosts?: typeof fetchDayclawPosts;
@@ -7,14 +8,26 @@ export async function runLiveCheck(options: {
   return { count: posts.length, newestId: posts[0]?.id ?? null };
 }
 
-async function main(): Promise<void> {
+type Writable = { write(value: string): unknown };
+
+export type LiveCheckCliIo = {
+  run?: typeof runLiveCheck;
+  writer: { stdout: Writable; stderr: Writable; process: { exitCode: number | string | null | undefined } };
+};
+
+export async function runLiveCheckCli(io: LiveCheckCliIo): Promise<void> {
   try {
-    const result = await runLiveCheck();
-    process.stdout.write(`Dayclaw schema valid: ${result.count} posts; newest ID: ${result.newestId ?? 'none'}\n`);
+    const result = await (io.run ?? runLiveCheck)();
+    io.writer.stdout.write(`Dayclaw schema valid: ${result.count} posts; newest ID: ${printableOneLine(result.newestId ?? 'none')}\n`);
+    io.writer.process.exitCode = 0;
   } catch {
-    process.stderr.write('Live check failed\n');
-    process.exitCode = 1;
+    io.writer.stderr.write('Live check failed\n');
+    io.writer.process.exitCode = 1;
   }
+}
+
+async function main(): Promise<void> {
+  await runLiveCheckCli({ writer: { stdout: process.stdout, stderr: process.stderr, process } });
 }
 
 if (import.meta.main) {

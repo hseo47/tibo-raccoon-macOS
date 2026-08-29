@@ -41,7 +41,7 @@ The command builds one `tibo-raccoon.2m.js` artifact, installs only that file wi
 
 The menu shows `Tibo Raccoon · N unread`. **Mark all as read** clears only the unread IDs currently persisted at the moment you choose it; opening a post never clears it, and later newly observed posts stay unread.
 
-Posts are shown newest first. An empty-text item is shown as **New media post from Tibo** and may include its validated original link. The plugin never renders, downloads, infers, or analyzes media.
+Posts are shown newest first. Ordinary text posts display Tibo's source text without summarization or semantic rewriting. An empty-text item is shown as **New media post from Tibo** and may include its validated original link. The plugin never renders, downloads, infers, or analyzes media.
 
 ## Privacy and limits
 
