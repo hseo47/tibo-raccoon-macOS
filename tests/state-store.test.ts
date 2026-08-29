@@ -77,8 +77,9 @@ describe('owner-aware locking', () => {
   });
   test('treats EPERM ownership probes as alive', async () => {
     const statePaths = await paths(); await writeFile(statePaths.lockFile, lockRecord(999_999, new Date(Date.now() - 31_000).toISOString()), { mode: 0o600 });
-    const originalKill = process.kill; process.kill = (() => { throw Object.assign(new Error(), { code: 'EPERM' }); }) as typeof process.kill;
-    try { await expect(mutateState(statePaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError); } finally { process.kill = originalKill; }
+    const script = `process.kill=()=>{throw Object.assign(new Error(),{code:'EPERM'})};const m=await import(${JSON.stringify(join(process.cwd(), 'src/state/store.ts'))});try{await m.mutateState({directory:process.argv[1],stateFile:process.argv[1]+'/state.json',lockFile:process.argv[1]+'/state.lock'},x=>x);process.exit(1)}catch(e){process.exit(e.name==='StateStoreError'?0:2)}`;
+    const child = Bun.spawn([process.execPath, '-e', script, statePaths.directory]);
+    expect(await child.exited).toBe(0);
     await expect(stat(statePaths.stateFile)).rejects.toThrow();
   });
   test('reclaims a dead owner lock older than thirty seconds', async () => {
@@ -101,6 +102,11 @@ describe('owner-aware locking', () => {
     ]);
     expect((await loadState(statePaths)).state.knownIds).toEqual(['stale-one', 'stale-two']);
     expect((await readdir(statePaths.directory)).filter((name) => name.includes('.reclaim'))).toEqual([]);
+  });
+  test('bounds a leaked reclaim marker without changing state', async () => {
+    const statePaths = await paths(); await loadState(statePaths); await writeFile(`${statePaths.lockFile}.reclaim`, 'leaked', { mode: 0o600 }); const started = Date.now();
+    await expect(mutateState(statePaths, (current) => ({ ...current, knownIds: ['never'] }))).rejects.toBeInstanceOf(StateStoreError);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_900); expect(Date.now() - started).toBeLessThan(2_500); await unlink(`${statePaths.lockFile}.reclaim`); expect((await loadState(statePaths)).state.knownIds).toEqual([]);
   });
   test('does not remove a replacement lock owned by another token', async () => {
     const statePaths = await paths(); let replace!: () => void; let finish!: () => void; const ready = new Promise<void>((resolve) => { replace = resolve; }); const allowed = new Promise<void>((resolve) => { finish = resolve; });

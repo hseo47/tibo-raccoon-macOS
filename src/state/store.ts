@@ -212,6 +212,7 @@ async function acquireLock(paths: StatePaths): Promise<LockRecord> {
   const owner: LockRecord = { pid: process.pid, createdAt: new Date().toISOString(), token: randomUUID() };
   for (;;) {
     if (await reclaimMarkerExists(paths)) {
+      if (Date.now() >= deadline) throw new StateStoreError('State is temporarily busy');
       await Bun.sleep(LOCK_WAIT_MS);
       continue;
     }
@@ -269,7 +270,10 @@ async function reclaimStaleLock(paths: StatePaths): Promise<void> {
 }
 
 async function reclaimMarkerExists(paths: StatePaths): Promise<boolean> {
-  try { await stat(`${paths.lockFile}.reclaim`); return true; } catch { return false; }
+  try { await stat(`${paths.lockFile}.reclaim`); return true; } catch (error) {
+    if (errorCode(error) === 'ENOENT') return false;
+    throw new StateStoreError('Private state storage is unavailable');
+  }
 }
 
 function ownerIsDead(pid: number): boolean {
