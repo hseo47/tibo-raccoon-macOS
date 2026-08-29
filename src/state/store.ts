@@ -318,11 +318,11 @@ async function recoverOwnedArtifact(
   if (artifact.kind === 'missing') return;
   const owner = artifact.kind === 'regular' && artifact.body !== null ? parseLockRecord(artifact.body) : null;
   if (owner === null) {
-    if (artifactIsStale(artifact)) await preserveAndDisplace(path, artifact);
+    if (artifactAgeAllowsRecovery(artifact)) await preserveAndDisplace(path, artifact);
     return;
   }
   if (recordIsMateriallyFuture(owner)) {
-    if (artifactIsStale(artifact) && ownerIsDead(owner.pid)) await preserveAndDisplace(path, artifact);
+    if (artifactAgeAllowsRecovery(artifact) && ownerIsDead(owner.pid)) await preserveAndDisplace(path, artifact);
     return;
   }
   if (recordIsStale(owner) && ownerIsDead(owner.pid)) await unlinkOwnedArtifact(path, owner);
@@ -398,8 +398,13 @@ function recordIsMateriallyFuture(owner: LockRecord): boolean {
   return Date.parse(owner.createdAt) - Date.now() > LOCK_STALE_MS;
 }
 
-function artifactIsStale(artifact: Artifact): boolean {
-  return Date.now() - artifact.modifiedAt > LOCK_STALE_MS;
+function artifactAgeAllowsRecovery(artifact: Artifact): boolean {
+  if (!Number.isFinite(artifact.modifiedAt)) return true;
+  // A corrected clock can leave crash residue materially ahead of local time.
+  // Either direction beyond the stale window is old or impossible enough to
+  // permit identity-stable recovery; valid owners still require their own
+  // timestamp and liveness checks above.
+  return Math.abs(Date.now() - artifact.modifiedAt) > LOCK_STALE_MS;
 }
 
 function ownerIsDead(pid: number): boolean {

@@ -35,15 +35,20 @@ async function ageArtifact(path: string): Promise<void> {
   const stale = new Date(Date.now() - 31_000);
   await utimes(path, stale, stale);
 }
+async function futureDateArtifact(path: string): Promise<void> {
+  const future = new Date(Date.now() + 60_000);
+  await utimes(path, future, future);
+}
 async function expectImpossibleOwnerRecovery(
   statePaths: Awaited<ReturnType<typeof tempStatePaths>>,
   artifact: string,
   body: string,
   orphanPattern: RegExp,
+  setArtifactTime: (path: string) => Promise<void> = ageArtifact,
 ): Promise<void> {
   await mutateState(statePaths, (current) => ({ ...current, knownIds: ['before'] }));
   await writeFile(artifact, body, { mode: 0o600 });
-  await ageArtifact(artifact);
+  await setArtifactTime(artifact);
 
   const recovered = await mutateState(statePaths, (current) => ({ ...current, knownIds: [...current.knownIds, 'after'] }));
   const orphans = (await readdir(statePaths.directory)).filter((entry) => orphanPattern.test(entry));
@@ -345,6 +350,89 @@ describe('owner-aware locking', () => {
     await writeFile(`${reclaimPaths.lockFile}.reclaim`, reclaim, { mode: 0o600 });
     await ageArtifact(primaryPaths.lockFile);
     await ageArtifact(`${reclaimPaths.lockFile}.reclaim`);
+
+    await Promise.all([
+      expect(mutateState(primaryPaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError),
+      expect(mutateState(reclaimPaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError),
+    ]);
+
+    expect(await readFile(primaryPaths.lockFile, 'utf8')).toBe(primary);
+    expect(await readFile(`${reclaimPaths.lockFile}.reclaim`, 'utf8')).toBe(reclaim);
+  });
+  test('recovers a dead far-future primary lock after clock rollback leaves future mtime', async () => {
+    const statePaths = await paths();
+    const body = lockRecord(999_999, '9999-12-31T23:59:59.999Z', 'rollback-primary');
+    await expectImpossibleOwnerRecovery(
+      statePaths,
+      statePaths.lockFile,
+      body,
+      /^state\.lock\.orphan-[0-9a-f-]{36}$/i,
+      futureDateArtifact,
+    );
+  });
+  test('recovers a dead far-future reclaim claim after clock rollback leaves future mtime', async () => {
+    const statePaths = await paths();
+    const claim = `${statePaths.lockFile}.reclaim`;
+    const body = lockRecord(999_999, '9999-12-31T23:59:59.999Z', 'rollback-reclaim');
+    await expectImpossibleOwnerRecovery(
+      statePaths,
+      claim,
+      body,
+      /^state\.lock\.reclaim\.orphan-[0-9a-f-]{36}$/i,
+      futureDateArtifact,
+    );
+  });
+  test('recovers malformed primary and reclaim records with impossible future mtime', async () => {
+    const primaryPaths = await paths();
+    const reclaimPaths = await paths();
+    const primary = lockRecord(2_147_483_648, '2000-01-01T00:00:00.000Z', 'rollback-invalid-primary');
+    const reclaim = lockRecord(2_147_483_648, '2000-01-01T00:00:00.000Z', 'rollback-invalid-reclaim');
+
+    await Promise.all([
+      expectImpossibleOwnerRecovery(
+        primaryPaths,
+        primaryPaths.lockFile,
+        primary,
+        /^state\.lock\.orphan-[0-9a-f-]{36}$/i,
+        futureDateArtifact,
+      ),
+      expectImpossibleOwnerRecovery(
+        reclaimPaths,
+        `${reclaimPaths.lockFile}.reclaim`,
+        reclaim,
+        /^state\.lock\.reclaim\.orphan-[0-9a-f-]{36}$/i,
+        futureDateArtifact,
+      ),
+    ]);
+  });
+  test('does not displace future-mtime records owned by a live process', async () => {
+    const primaryPaths = await paths();
+    const reclaimPaths = await paths();
+    const primary = lockRecord(process.pid, '9999-12-31T23:59:59.999Z', 'rollback-live-primary');
+    const reclaim = lockRecord(process.pid, '9999-12-31T23:59:59.999Z', 'rollback-live-reclaim');
+    await writeFile(primaryPaths.lockFile, primary, { mode: 0o600 });
+    await writeFile(`${reclaimPaths.lockFile}.reclaim`, reclaim, { mode: 0o600 });
+    await futureDateArtifact(primaryPaths.lockFile);
+    await futureDateArtifact(`${reclaimPaths.lockFile}.reclaim`);
+
+    await Promise.all([
+      expect(mutateState(primaryPaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError),
+      expect(mutateState(reclaimPaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError),
+    ]);
+
+    expect(await readFile(primaryPaths.lockFile, 'utf8')).toBe(primary);
+    expect(await readFile(`${reclaimPaths.lockFile}.reclaim`, 'utf8')).toBe(reclaim);
+  });
+  test('does not displace ordinary fresh records only because mtime is future', async () => {
+    const primaryPaths = await paths();
+    const reclaimPaths = await paths();
+    const createdAt = new Date().toISOString();
+    const primary = lockRecord(999_999, createdAt, 'fresh-future-mtime-primary');
+    const reclaim = lockRecord(999_999, createdAt, 'fresh-future-mtime-reclaim');
+    await writeFile(primaryPaths.lockFile, primary, { mode: 0o600 });
+    await writeFile(`${reclaimPaths.lockFile}.reclaim`, reclaim, { mode: 0o600 });
+    await futureDateArtifact(primaryPaths.lockFile);
+    await futureDateArtifact(`${reclaimPaths.lockFile}.reclaim`);
 
     await Promise.all([
       expect(mutateState(primaryPaths, (current) => current)).rejects.toBeInstanceOf(StateStoreError),
