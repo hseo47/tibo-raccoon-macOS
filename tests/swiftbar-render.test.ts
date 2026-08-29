@@ -11,6 +11,22 @@ import { post, stateWith } from './helpers/factories';
 
 const pluginPath = '/tmp/Tibo Raccoon/tibo-raccoon.2m.js';
 
+function splitSwiftBarLines(menu: string): string[] {
+  return menu.split(/[\n\r\u000B\u000C\u0085\u2028\u2029]/u);
+}
+
+function parseSwiftBarBashParameter(line: string): string {
+  const match = /\| bash=(.+) param1=/.exec(line);
+  if (match === null) throw new Error('Missing bash parameter');
+  const quoted = match[1];
+  if (quoted === undefined) throw new Error('Missing quoted parameter');
+  const delimiter = quoted[0];
+  if ((delimiter !== "'" && delimiter !== '"') || quoted.at(-1) !== delimiter) {
+    throw new Error('Expected a delimited parameter');
+  }
+  return quoted.slice(1, -1);
+}
+
 test('renders an image-only paired Base64 header and unread dropdown count', () => {
   const menu = renderSwiftBarMenu({
     state: stateWith({ unreadIds: ['2'], cachedPosts: [post('2')] }),
@@ -78,15 +94,42 @@ test('neutralizes pipes, controls, CRLF, separators, and parameter-looking title
   expect(menu).not.toContain('bash=/tmp/evil param1=oops');
 });
 
+test('Unicode line and paragraph separators cannot create unowned SwiftBar rows', () => {
+  for (const separator of ['\u2028', '\u2029']) {
+    const menu = renderSwiftBarMenu({
+      state: stateWith({ cachedPosts: [post('unicode', { text: `safe${separator}---${separator}tail` })] }),
+      pluginPath,
+    });
+    const lines = splitSwiftBarLines(menu);
+    expect(lines.filter((line) => line === '---')).toHaveLength(2);
+    expect(lines).toContain('  safe');
+    expect(lines).toContain('  — — —');
+    expect(lines).toContain('  tail');
+    expect(lines.filter((line) => line.includes('safe') || line.includes('tail') || line.includes('— — —'))).toEqual([
+      '  safe', '  — — —', '  tail',
+    ]);
+  }
+});
+
 test('quotes only a safe absolute plugin path for actions', () => {
-  const menu = renderSwiftBarMenu({
-    state: stateWith(),
-    pluginPath: "/tmp/Tibo Raccoon's\\plugin.2m.js",
-  });
-  expect(menu).toContain("bash='/tmp/Tibo Raccoon\\'s\\\\plugin.2m.js' param1=mark-read");
+  for (const path of [
+    '/tmp/Tibo Raccoon/tibo-raccoon.2m.js',
+    "/tmp/Tibo Raccoon's/plugin.2m.js",
+    '/tmp/back\\slash/plugin.2m.js',
+    '/tmp/double"quote/plugin.2m.js',
+  ]) {
+    const actionLines = renderSwiftBarMenu({ state: stateWith(), pluginPath: path })
+      .split('\n')
+      .filter((line) => line.includes(' | bash='));
+    expect(actionLines).toHaveLength(2);
+    expect(actionLines.map(parseSwiftBarBashParameter)).toEqual([path, path]);
+  }
   expect(() => renderSwiftBarMenu({ state: stateWith(), pluginPath: '/tmp/evil | bash=/tmp/evil' })).toThrow();
   expect(() => renderSwiftBarMenu({ state: stateWith(), pluginPath: '/tmp/evil\nplugin' })).toThrow();
   expect(() => renderSwiftBarMenu({ state: stateWith(), pluginPath: '/tmp/evil\u0000plugin' })).toThrow();
+  expect(() => renderSwiftBarMenu({ state: stateWith(), pluginPath: '/tmp/evil\u2028plugin' })).toThrow();
+  expect(() => renderSwiftBarMenu({ state: stateWith(), pluginPath: '/tmp/evil\u2029plugin' })).toThrow();
+  expect(() => renderSwiftBarMenu({ state: stateWith(), pluginPath: '/tmp/both\'"quotes/plugin' })).toThrow();
 });
 
 test('formats post times with the injected locale and time zone', () => {
@@ -106,4 +149,32 @@ test('renders state, stale, and offline status rows and prioritizes icons', () =
   expect(renderSwiftBarMenu({ state: stateWith({ consecutiveFailures: 1 }), pluginPath })).toContain('Feed unavailable · showing cached posts');
   expect(renderSwiftBarMenu({ state: stateWith({ consecutiveFailures: 3 }), pluginPath })).toContain('Feed offline · showing cached posts');
   expect(renderSwiftBarMenu({ state: stateWith(), pluginPath, notice: 'state' })).toEndWith('Local state unavailable · cached status may be incomplete');
+});
+
+test('renders the complete ordered menu with trusted actions and successful-refresh ledger', () => {
+  const state = stateWith({
+    knownIds: ['post-1'],
+    cachedPosts: [post('post-1', { text: 'first post', publishedAt: '2026-08-29T00:00:00.000Z' })],
+    lastSuccessAt: '2026-08-29T12:34:00.000Z',
+  });
+  const menu = renderSwiftBarMenu({ state, pluginPath, locale: 'en-US', timeZone: 'UTC' });
+  expect(menu.split('\n')).toEqual([
+    `| image=${ICON_BASE64.calm.light},${ICON_BASE64.calm.dark} dropdown=false`,
+    '---',
+    'Tibo Raccoon · 0 unread',
+    'Read · Aug 29, 2026 at 12:00 AM',
+    '  first post',
+    'Open original post | href=https://x.com/thsottiaux/status/post-1',
+    '---',
+    "Mark all as read | bash='/tmp/Tibo Raccoon/tibo-raccoon.2m.js' param1=mark-read terminal=false refresh=true",
+    "Refresh now | bash='/tmp/Tibo Raccoon/tibo-raccoon.2m.js' param1=refresh-now terminal=false refresh=true",
+    "Open Tibo's profile | href=https://x.com/thsottiaux",
+    'Last successful refresh · Aug 29, 2026 at 12:34 PM',
+  ]);
+  const lines = menu.split('\n');
+  expect(lines.filter((line) => line.includes('bash='))).toEqual([
+    "Mark all as read | bash='/tmp/Tibo Raccoon/tibo-raccoon.2m.js' param1=mark-read terminal=false refresh=true",
+    "Refresh now | bash='/tmp/Tibo Raccoon/tibo-raccoon.2m.js' param1=refresh-now terminal=false refresh=true",
+  ]);
+  expect(lines.filter((line) => !line.includes('bash=')).every((line) => !/\b(?:param\d|terminal|refresh)=/.test(line))).toBe(true);
 });

@@ -5,7 +5,7 @@ const DEFAULT_WRAP_WIDTH = 72;
 const DEFAULT_MINIMUM_POSTS = 5;
 
 export function escapeSwiftBarTitle(value: string): string {
-  const normalized = value.replace(/\r\n?/g, '\n').replace(/\t/g, ' ');
+  const normalized = value.replace(/\r\n?|[\u2028\u2029]/g, '\n').replace(/\t/g, ' ');
   return normalized
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
     .replace(/\|/g, '｜')
@@ -58,8 +58,9 @@ export function renderSwiftBarMenu(options: {
   const { state, pluginPath, notice, locale = 'en-US', timeZone } = options;
   const icon = chooseIconState(state);
   const quotedPluginPath = quoteSwiftBarParam(pluginPath);
+  const resolvedTimeZone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const unreadIds = new Set(state.unreadIds);
-  const renderedPostRows = selectMenuPosts(state).flatMap((post) => renderPostRows(post, unreadIds.has(post.id), locale, timeZone));
+  const renderedPostRows = selectMenuPosts(state).flatMap((post) => renderPostRows(post, unreadIds.has(post.id), locale, resolvedTimeZone));
   const lines = [
     `| image=${ICON_BASE64[icon].light},${ICON_BASE64[icon].dark} dropdown=false`,
     '---',
@@ -69,19 +70,21 @@ export function renderSwiftBarMenu(options: {
     `Mark all as read | bash=${quotedPluginPath} param1=mark-read terminal=false refresh=true`,
     `Refresh now | bash=${quotedPluginPath} param1=refresh-now terminal=false refresh=true`,
     `Open Tibo's profile | href=${PROFILE_URL}`,
-    renderStatus(state, notice ?? null),
+    renderStatus(state, notice ?? null, locale, resolvedTimeZone),
   ];
   return lines.join('\n');
 }
 
 function quoteSwiftBarParam(value: string): string {
-  if (!value.startsWith('/') || /[\r\n|\u0000-\u001F\u007F-\u009F]/.test(value)) {
+  if (!value.startsWith('/') || /[\r\n|\u0000-\u001F\u007F-\u009F\u2028\u2029]/.test(value)) {
     throw new Error('Plugin path must be a safe absolute path');
   }
-  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  if (!value.includes("'")) return `'${value}'`;
+  if (!value.includes('"')) return `"${value}"`;
+  throw new Error('Plugin path cannot contain both quote delimiters');
 }
 
-function renderPostRows(post: Post, unread: boolean, locale: string, timeZone: string | undefined): string[] {
+function renderPostRows(post: Post, unread: boolean, locale: string, timeZone: string): string[] {
   const timestamp = post.publishedAt === null
     ? 'Time unavailable'
     : new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(new Date(post.publishedAt));
@@ -95,12 +98,13 @@ function renderPostRows(post: Post, unread: boolean, locale: string, timeZone: s
   return rows;
 }
 
-function renderStatus(state: RaccoonState, notice: RuntimeNotice): string {
+function renderStatus(state: RaccoonState, notice: RuntimeNotice, locale: string, timeZone: string): string {
   if (notice === 'state') return 'Local state unavailable · cached status may be incomplete';
   if (state.consecutiveFailures >= 3) return 'Feed offline · showing cached posts';
   if (state.consecutiveFailures > 0) return 'Feed unavailable · showing cached posts';
   if (state.lastSuccessAt === null) return 'Waiting for first successful refresh';
-  return 'Feed up to date';
+  const timestamp = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(new Date(state.lastSuccessAt));
+  return `Last successful refresh · ${timestamp}`;
 }
 
 function comparePostsNewestFirst(left: Post, right: Post): number {
