@@ -31,14 +31,6 @@ export class StateStoreError extends Error {
 }
 
 type LockRecord = { pid: number; createdAt: string; token: string };
-type ProcessProbe = (pid: number, signal: 0) => void;
-let processProbe: ProcessProbe = process.kill.bind(process) as ProcessProbe;
-
-/** Test-only seam for the OS liveness distinction that cannot be safely created in-process. */
-export const stateStoreTesting = {
-  setProcessProbe(probe: ProcessProbe): void { processProbe = probe; },
-  reset(): void { processProbe = process.kill.bind(process) as ProcessProbe; },
-};
 
 export function defaultStatePaths(options: { testDirectory?: string } = {}): StatePaths {
   const directory = options.testDirectory ?? join(homedir(), 'Library', 'Application Support', 'Tibo Raccoon');
@@ -48,13 +40,22 @@ export function defaultStatePaths(options: { testDirectory?: string } = {}): Sta
 export async function loadState(paths: StatePaths): Promise<StateLoad> {
   await ensureDirectory(paths);
   const initial = await readState(paths);
-  if (initial.kind === 'existing') return { state: initial.state, source: 'existing' };
-  if (initial.kind === 'missing') return { state: createInitialState(), source: 'missing' };
+  if (initial.kind === 'existing' && !(await recoveryMarkerExists(paths))) return { state: initial.state, source: 'existing' };
+  if (initial.kind === 'missing' && !(await recoveryMarkerExists(paths))) return { state: createInitialState(), source: 'missing' };
 
   return withLock(paths, async () => {
     const current = await readState(paths);
-    if (current.kind === 'existing') return { state: current.state, source: 'existing' as const };
-    if (current.kind === 'missing') return { state: createInitialState(), source: 'missing' as const };
+    if (current.kind === 'existing') {
+      await removeRecoveryMarker(paths);
+      return { state: current.state, source: 'existing' as const };
+    }
+    if (current.kind === 'missing' && !(await recoveryMarkerExists(paths))) return { state: createInitialState(), source: 'missing' as const };
+    if (current.kind === 'missing') {
+      const state = createInitialState({ recoveryPending: true });
+      await writeState(paths, state);
+      await removeRecoveryMarker(paths);
+      return { state, source: 'recovered' as const };
+    }
     const state = await recoverCorruptState(paths);
     return { state, source: 'recovered' as const };
   });
@@ -110,10 +111,46 @@ async function readState(paths: StatePaths): Promise<ReadResult> {
 }
 
 async function recoverCorruptState(paths: StatePaths): Promise<RaccoonState> {
+  await writeRecoveryMarker(paths);
   await quarantine(paths);
   const recovered = createInitialState({ recoveryPending: true });
   await writeState(paths, recovered);
+  await removeRecoveryMarker(paths);
   return recovered;
+}
+
+function recoveryMarkerFile(paths: StatePaths): string { return `${paths.stateFile}.recovery`; }
+
+async function recoveryMarkerExists(paths: StatePaths): Promise<boolean> {
+  try { await stat(recoveryMarkerFile(paths)); return true; } catch (error) {
+    if (errorCode(error) === 'ENOENT') return false;
+    throw new StateStoreError('Private state storage is unavailable');
+  }
+}
+
+async function writeRecoveryMarker(paths: StatePaths): Promise<void> {
+  const marker = recoveryMarkerFile(paths);
+  const temporary = `${marker}.tmp-${randomUUID()}`;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(temporary, 'wx', FILE_MODE);
+    await chmod(temporary, FILE_MODE);
+    await handle.writeFile('recovery\n', 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporary, marker);
+    await chmod(marker, FILE_MODE).catch(() => undefined);
+  } catch {
+    throw new StateStoreError('State recovery could not be saved');
+  } finally {
+    if (handle !== undefined) await handle.close().catch(() => undefined);
+    await unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function removeRecoveryMarker(paths: StatePaths): Promise<void> {
+  await unlink(recoveryMarkerFile(paths)).catch(() => undefined);
 }
 
 async function quarantine(paths: StatePaths): Promise<void> {
@@ -151,7 +188,8 @@ async function writeState(paths: StatePaths, state: RaccoonState): Promise<void>
     await handle.close();
     handle = undefined;
     await rename(temporary, paths.stateFile);
-    await chmod(paths.stateFile, FILE_MODE);
+    // The temporary was already private; rename is the durable commit boundary.
+    await chmod(paths.stateFile, FILE_MODE).catch(() => undefined);
   } catch {
     throw new StateStoreError('State update could not be saved');
   } finally {
@@ -173,17 +211,24 @@ async function acquireLock(paths: StatePaths): Promise<LockRecord> {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   const owner: LockRecord = { pid: process.pid, createdAt: new Date().toISOString(), token: randomUUID() };
   for (;;) {
+    if (await reclaimMarkerExists(paths)) {
+      await Bun.sleep(LOCK_WAIT_MS);
+      continue;
+    }
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    let created = false;
     try {
-      const handle = await open(paths.lockFile, 'wx', FILE_MODE);
-      try {
-        await chmod(paths.lockFile, FILE_MODE);
-        await handle.writeFile(JSON.stringify(owner), 'utf8');
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      handle = await open(paths.lockFile, 'wx', FILE_MODE);
+      created = true;
+      await chmod(paths.lockFile, FILE_MODE);
+      await handle.writeFile(JSON.stringify(owner), 'utf8');
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
       return owner;
     } catch (error) {
+      if (handle !== undefined) await handle.close().catch(() => undefined);
+      if (created) await unlink(paths.lockFile).catch(() => undefined);
       if (errorCode(error) !== 'EEXIST') throw new StateStoreError('Private state storage is unavailable');
     }
 
@@ -194,6 +239,22 @@ async function acquireLock(paths: StatePaths): Promise<LockRecord> {
 }
 
 async function reclaimStaleLock(paths: StatePaths): Promise<void> {
+  const claim = `${paths.lockFile}.reclaim`;
+  let claimHandle: Awaited<ReturnType<typeof open>> | undefined;
+  let claimed = false;
+  try {
+    claimHandle = await open(claim, 'wx', FILE_MODE);
+    claimed = true;
+    await chmod(claim, FILE_MODE);
+    await claimHandle.writeFile(randomUUID(), 'utf8');
+    await claimHandle.sync();
+  } catch {
+    if (claimHandle !== undefined) await claimHandle.close().catch(() => undefined);
+    if (claimed) await unlink(claim).catch(() => undefined);
+    return;
+  }
+  if (claimHandle !== undefined) await claimHandle.close().catch(() => undefined);
+  try {
   let body: string;
   try { body = await readFile(paths.lockFile, 'utf8'); } catch { return; }
   const owner = parseLockRecord(body);
@@ -204,11 +265,16 @@ async function reclaimStaleLock(paths: StatePaths): Promise<void> {
   } catch {
     // Another contender or owner changed the lock. It is safe to retry acquisition.
   }
+  } finally { await unlink(claim).catch(() => undefined); }
+}
+
+async function reclaimMarkerExists(paths: StatePaths): Promise<boolean> {
+  try { await stat(`${paths.lockFile}.reclaim`); return true; } catch { return false; }
 }
 
 function ownerIsDead(pid: number): boolean {
   try {
-    processProbe(pid, 0);
+    process.kill(pid, 0);
     return false;
   } catch (error) {
     return errorCode(error) === 'ESRCH';
