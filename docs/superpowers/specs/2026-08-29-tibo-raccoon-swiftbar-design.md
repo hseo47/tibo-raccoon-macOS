@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: In-chat design approved; written specification awaiting user review and possible amendment
+Status: Approved by the user on 2026-08-29
 
 ## Summary
 
