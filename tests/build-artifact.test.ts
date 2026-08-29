@@ -113,6 +113,43 @@ test('rejects arbitrary runtime package imports', () => {
   expect(() => assertAllowedRuntimeImports('const leftPad = import("left-pad");')).toThrow('Plugin artifact verification failed');
 });
 
+test('rejects a computed dynamic import in emitted JavaScript', async () => {
+  const emitted = await emitJavaScript('const target = process.argv[2]; void import(target);');
+  expect(emitted).toContain('import(');
+  expect(() => assertAllowedRuntimeImports(emitted)).toThrow('Plugin artifact verification failed');
+});
+
+test('extracts and allowlists emitted re-export specifiers', async () => {
+  const emitted = await emitJavaScript('export * from "fs/promises"; export { readFile } from "fs";');
+  expect(extractRuntimeImportSpecifiers(emitted)).toEqual(['fs', 'fs/promises']);
+  expect(() => assertAllowedRuntimeImports(emitted)).not.toThrow();
+});
+
+test('rejects an emitted bare-package re-export', async () => {
+  const emitted = await emitJavaScript('export * from "left-pad";', ['left-pad']);
+  expect(extractRuntimeImportSpecifiers(emitted)).toEqual(['left-pad']);
+  expect(() => assertAllowedRuntimeImports(emitted)).toThrow('Plugin artifact verification failed');
+});
+
+test('ignores import-looking strings and comments in emitted JavaScript', async () => {
+  const emitted = await emitJavaScript('export const text = "import(\\\"left-pad\\\")"; // import("left-pad")');
+  expect(extractRuntimeImportSpecifiers(emitted)).toEqual([]);
+  expect(() => assertAllowedRuntimeImports(emitted)).not.toThrow();
+});
+
+async function emitJavaScript(source: string, external: string[] = []): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-import-scan-'));
+  const entrypoint = join(directory, 'entry.js');
+  try {
+    await writeFile(entrypoint, source, { mode: 0o600 });
+    const result = await Bun.build({ entrypoints: [entrypoint], target: 'bun', format: 'esm', minify: true, external });
+    if (!result.success || result.outputs.length !== 1) throw new Error('Failed to emit JavaScript fixture');
+    return await result.outputs[0]!.text();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function awaitChildExit(child: ReturnType<typeof Bun.spawn>, timeoutMs: number): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

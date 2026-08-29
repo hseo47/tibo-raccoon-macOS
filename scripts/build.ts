@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { access, chmod, mkdir, open, rename, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
+import * as ts from 'typescript';
 
 import { ICON_BASE64, ICON_SHA256 } from '../src/generated/icons';
 
@@ -76,12 +77,28 @@ async function validateBunPath(bunPath: string): Promise<void> {
 }
 
 export function extractRuntimeImportSpecifiers(source: string): string[] {
+  const file = ts.createSourceFile('tibo-raccoon-artifact.js', source, ts.ScriptTarget.ESNext, false, ts.ScriptKind.JS);
+  const parseDiagnostics = (file as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics;
+  if (parseDiagnostics === undefined || parseDiagnostics.length !== 0) throw new Error('Plugin artifact verification failed');
   const specifiers = new Set<string>();
-  const staticImport = /\bimport(?!\s*\()\s*(?:[^'"`]*?from\s*)?(['"])([^'"`]+)\1/g;
-  const dynamicImport = /\bimport\s*\(\s*(['"])([^'"`]+)\1\s*\)/g;
-  for (const pattern of [staticImport, dynamicImport]) {
-    for (const match of source.matchAll(pattern)) specifiers.add(match[2]!);
-  }
+  const addModuleSpecifier = (moduleSpecifier: ts.Expression | undefined): void => {
+    if (moduleSpecifier === undefined || !ts.isStringLiteralLike(moduleSpecifier)) {
+      throw new Error('Plugin artifact verification failed');
+    }
+    specifiers.add(moduleSpecifier.text);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier !== undefined) addModuleSpecifier(node.moduleSpecifier);
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      if (node.arguments.length !== 1) throw new Error('Plugin artifact verification failed');
+      addModuleSpecifier(node.arguments[0]);
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      throw new Error('Plugin artifact verification failed');
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
   return [...specifiers].sort();
 }
 
