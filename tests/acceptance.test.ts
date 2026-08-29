@@ -34,6 +34,7 @@ type FetchBarrier = {
   readonly started: Promise<void>;
   signalStarted(): void;
   release(posts: Post[]): void;
+  cancel(): void;
   waitForPosts(): Promise<Post[]>;
 };
 
@@ -130,6 +131,11 @@ test('baseline to unread to read to offline preserves the approved contract', as
     assertHeaderImages(baselineMenu, CALM_LIGHT_SHA256, CALM_DARK_SHA256);
     expect(storedPngPixel(headerImages(baselineMenu).light, 21, 21)).toEqual([0x8f, 0xcb, 0xb7, 0xff]);
     expect(storedPngPixel(headerImages(baselineMenu).light, 22, 24)).toEqual([0x8f, 0xcb, 0xb7, 0xff]);
+    expectBaselineRows(baselineMenu);
+    const baselineState = await loadState(app.statePaths);
+    expect(baselineState.state.knownIds).toEqual(['1', '2', '3', '4', '5']);
+    expect(baselineState.state.cachedPosts.map(({ id }) => id)).toEqual(['5', '4', '3', '2', '1']);
+    expect(baselineState.state.unreadIds).toEqual([]);
 
     const safeText = 'a nuanced message | bash=/tmp/evil\n---';
     app.feed.push(post('6', {
@@ -172,8 +178,24 @@ test('baseline to unread to read to offline preserves the approved contract', as
     app.failNext('network');
     app.failNext('timeout');
     app.failNext('malformed');
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const failurePlan: ReadonlyArray<readonly [FeedErrorKind, number]> = [
+      ['network', 2],
+      ['timeout', 4],
+      ['malformed', 8],
+    ];
+    for (const [kind, backoffMinutes] of failurePlan) {
       expect(await app.action('refresh-now')).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+      const failed = await loadState(app.statePaths);
+      expect(failed.state.lastError).toBe(kind);
+      expect(Date.parse(failed.state.nextRetryAt!) - Date.parse(failed.state.lastAttemptAt!)).toBe(backoffMinutes * 60_000);
+
+      const fetchesBeforeBackoffRender = fetchCallCount(app);
+      app.advance(30_001);
+      const backoffMenu = await app.render();
+      expect(fetchCallCount(app)).toBe(fetchesBeforeBackoffRender);
+      expect(backoffMenu).toContain('Tibo Raccoon · 1 unread');
+      expect(backoffMenu).toContain('  New media post from Tibo');
+      expect((await loadState(app.statePaths)).state.lastAttemptAt).toBe(failed.state.lastAttemptAt);
     }
     const unreadDuringFailures = await app.render();
     expect(unreadDuringFailures).toContain('  New media post from Tibo');
@@ -199,16 +221,23 @@ test('baseline to unread to read to offline preserves the approved contract', as
 
     const barrier = createFetchBarrier();
     nextFetchBarrier = barrier;
-    const forcedPoll = app.action('refresh-now');
-    await barrier.started;
-    expect(await app.action('mark-read')).toEqual({ stdout: '', stderr: '', exitCode: 0 });
-    const laterPost = post('8', { publishedAt: '2026-08-30T00:03:00.000Z' });
-    app.feed.push(laterPost);
-    barrier.release(app.feed);
-    expect(await forcedPoll).toEqual({ stdout: '', stderr: '', exitCode: 0 });
-    const afterConcurrentMerge = await loadState(app.statePaths);
-    expect(afterConcurrentMerge.state.unreadIds).toEqual(['8']);
-    expect(afterConcurrentMerge.state.knownIds).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+    let forcedPoll: Promise<CliResult> | undefined;
+    try {
+      forcedPoll = app.action('refresh-now');
+      await barrier.started;
+      expect(await app.action('mark-read')).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+      const laterPost = post('8', { publishedAt: '2026-08-30T00:03:00.000Z' });
+      app.feed.push(laterPost);
+      barrier.release(app.feed);
+      expect(await forcedPoll).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+      const afterConcurrentMerge = await loadState(app.statePaths);
+      expect(afterConcurrentMerge.state.unreadIds).toEqual(['8']);
+      expect(afterConcurrentMerge.state.knownIds).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+    } finally {
+      if (nextFetchBarrier === barrier) nextFetchBarrier = null;
+      barrier.cancel();
+      if (forcedPoll !== undefined) await forcedPoll.catch(() => undefined);
+    }
 
     expect(await boundarySnapshot(root, sentinel)).toEqual(boundaryBefore);
     expect(await readdir(app.statePaths.directory)).toEqual(['state.json']);
@@ -219,6 +248,44 @@ test('baseline to unread to read to offline preserves the approved contract', as
     }
   } finally {
     nextFetchBarrier = null;
+    await cleanupAcceptanceHarness(app);
+  }
+});
+
+test('corrupt state recovery preserves bytes and alerts every current post', async () => {
+  const app = await acceptanceHarness({
+    baseline: [
+      post('10', { text: 'recovery source ten', publishedAt: '2026-08-30T01:00:00.000Z' }),
+      post('11', { text: 'recovery source eleven', publishedAt: '2026-08-30T01:01:00.000Z' }),
+    ],
+  });
+  const corruptBytes = '{not-valid-state-json\n';
+
+  try {
+    await writeFile(app.statePaths.stateFile, corruptBytes, { mode: 0o600 });
+    const beforeSuccessfulPoll = await loadState(app.statePaths);
+    expect(beforeSuccessfulPoll.source).toBe('recovered');
+    expect(beforeSuccessfulPoll.state.recoveryPending).toBe(true);
+
+    const quarantine = (await readdir(app.statePaths.directory)).filter((name) => /^state\.json\.corrupt-\d{8}T\d{9}Z$/.test(name));
+    expect(quarantine).toHaveLength(1);
+    expect(await readFile(join(app.statePaths.directory, quarantine[0]!), 'utf8')).toBe(corruptBytes);
+    expect((await stat(app.statePaths.stateFile)).mode & 0o777).toBe(0o600);
+
+    const menu = await app.render();
+    expect(menu).toContain('Tibo Raccoon · 2 unread');
+    expect(menu).toContain('  recovery source eleven');
+    expect(menu).toContain('  recovery source ten');
+    assertHeaderImages(menu, UNREAD_LIGHT_SHA256, UNREAD_DARK_SHA256);
+
+    const afterSuccessfulPoll = await loadState(app.statePaths);
+    expect(afterSuccessfulPoll.source).toBe('existing');
+    expect(afterSuccessfulPoll.state.recoveryPending).toBe(false);
+    expect(afterSuccessfulPoll.state.knownIds).toEqual(['10', '11']);
+    expect(afterSuccessfulPoll.state.unreadIds).toEqual(['11', '10']);
+    expect(afterSuccessfulPoll.state.cachedPosts.map(({ id }) => id)).toEqual(['11', '10']);
+    expect((await stat(app.statePaths.stateFile)).mode & 0o777).toBe(0o600);
+  } finally {
     await cleanupAcceptanceHarness(app);
   }
 });
@@ -265,13 +332,46 @@ async function boundarySnapshot(root: string, sentinel: string): Promise<{
 
 function createFetchBarrier(): FetchBarrier {
   let signalStarted: (() => void) | undefined;
-  let release: ((posts: Post[]) => void) | undefined;
+  let resolvePosts: ((posts: Post[]) => void) | undefined;
+  let rejectPosts: ((reason: Error) => void) | undefined;
+  let settled: { posts: Post[] } | { error: Error } | undefined;
+  const settle = (outcome: { posts: Post[] } | { error: Error }) => {
+    if (settled !== undefined) return;
+    settled = outcome;
+    if ('posts' in outcome) resolvePosts?.(outcome.posts);
+    else rejectPosts?.(outcome.error);
+  };
   return {
     started: new Promise<void>((resolve) => { signalStarted = resolve; }),
     signalStarted: () => signalStarted?.(),
-    release: (posts) => release?.(posts),
-    waitForPosts: () => new Promise<Post[]>((resolve) => { release = resolve; }),
+    release: (posts) => settle({ posts }),
+    cancel: () => settle({ error: new Error('Acceptance fetch barrier cancelled') }),
+    waitForPosts: () => new Promise<Post[]>((resolve, reject) => {
+      resolvePosts = resolve;
+      rejectPosts = reject;
+      if (settled === undefined) return;
+      if ('posts' in settled) resolve(settled.posts);
+      else reject(settled.error);
+    }),
   };
+}
+
+function expectBaselineRows(menu: string): void {
+  const lines = menu.split('\n');
+  const expected = [
+    ['Read · Aug 25, 2026 at 12:00 AM', '  post 5'],
+    ['Read · Aug 24, 2026 at 12:00 AM', '  post 4'],
+    ['Read · Aug 23, 2026 at 12:00 AM', '  post 3'],
+    ['Read · Aug 22, 2026 at 12:00 AM', '  post 2'],
+    ['Read · Aug 21, 2026 at 12:00 AM', '  post 1'],
+  ] as const;
+  const textIndexes: number[] = [];
+  for (const [status, text] of expected) {
+    expect(lines.filter((line) => line === status)).toHaveLength(1);
+    expect(lines.filter((line) => line === text)).toHaveLength(1);
+    textIndexes.push(lines.indexOf(text));
+  }
+  expect(textIndexes).toEqual([...textIndexes].sort((left, right) => left - right));
 }
 
 function headerImages(menu: string): { light: Uint8Array; dark: Uint8Array } {
