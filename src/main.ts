@@ -65,7 +65,7 @@ function resolveDedicatedTestStateDirectory(path: string, productionDirectory: s
     if (!lstatSync(marker).isFile()) return null;
     if (readFileSync(marker, 'utf8') !== TEST_STATE_MARKER_CONTENT) return null;
     if (!hasOnlyAllowedTestStateEntries(directory)) return null;
-    return path;
+    return directory;
   } catch {
     return null;
   }

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import { lstat, mkdtemp, stat, symlink, writeFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { lstat, mkdtemp, realpath, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { basename, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { RaccoonState, RuntimeNotice } from '../src/domain';
@@ -232,14 +232,33 @@ test('production path resolution accepts only representable plugin paths and own
   ]) {
     expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: rejected }, productionDirectory).directory).toBe(productionDirectory);
   }
-  expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: testDirectory }, productionDirectory).directory).toBe(testDirectory);
-  expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: allowedStateDirectory }, productionDirectory).directory).toBe(allowedStateDirectory);
+  expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: testDirectory }, productionDirectory).directory).toBe(await realpath(testDirectory));
+  expect(resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: allowedStateDirectory }, productionDirectory).directory).toBe(await realpath(allowedStateDirectory));
   expect(isAbsolute(testDirectory)).toBe(true);
   expect(await Bun.file(missingDirectory).exists()).toBe(false);
   expect((await lstat(symlinkDirectory)).isSymbolicLink()).toBe(true);
   expect((await lstat(join(markerSymlinkDirectory, TEST_STATE_MARKER))).isSymbolicLink()).toBe(true);
   expect((await stat(broadDirectory)).mode & 0o777).toBe(broadMode);
   expect(await Bun.file(join(broadDirectory, TEST_STATE_MARKER)).text()).toBe(broadMarker);
+});
+
+test('accepted test state aliases return the immutable canonical temporary leaf', async () => {
+  const candidate = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
+  const productionDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-state-'));
+  const retarget = await mkdtemp(join(tmpdir(), 'unrelated-alias-target-'));
+  const alias = join(tmpdir(), `tibo-raccoon-canonical-alias-${crypto.randomUUID()}`);
+  await markTestStateDirectory(candidate);
+  await symlink(tmpdir(), alias);
+
+  const aliasCandidate = join(alias, basename(candidate));
+  const paths = resolveStatePaths({ TIBO_RACCOON_TEST_MODE: '1', TIBO_RACCOON_TEST_STATE_DIR: aliasCandidate }, productionDirectory);
+  const canonicalCandidate = await realpath(candidate);
+
+  expect(paths.directory).toBe(canonicalCandidate);
+  await unlink(alias);
+  await symlink(retarget, alias);
+  expect(paths.directory).toBe(canonicalCandidate);
+  expect(paths.stateFile).toBe(join(canonicalCandidate, 'state.json'));
 });
 
 test('writer emits each non-empty stream exactly once and sets the result exit code', () => {
