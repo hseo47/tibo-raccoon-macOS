@@ -70,13 +70,13 @@ export function renderSwiftBarMenu(options: {
     `Mark all as read | bash=${quotedPluginPath} param1=mark-read terminal=false refresh=true`,
     `Refresh now | bash=${quotedPluginPath} param1=refresh-now terminal=false refresh=true`,
     `Open Tibo's profile | href=${PROFILE_URL}`,
-    renderStatus(state, notice ?? null, locale, resolvedTimeZone),
+    renderStatus(state, notice ?? null),
   ];
   return lines.join('\n');
 }
 
 function quoteSwiftBarParam(value: string): string {
-  if (!value.startsWith('/') || /[\r\n|\u0000-\u001F\u007F-\u009F\u2028\u2029]/.test(value)) {
+  if (!value.startsWith('/') || value.endsWith('\\') || /[\r\n|\u0000-\u001F\u007F-\u009F\u2028\u2029]/.test(value)) {
     throw new Error('Plugin path must be a safe absolute path');
   }
   if (!value.includes("'")) return `'${value}'`;
@@ -98,13 +98,16 @@ function renderPostRows(post: Post, unread: boolean, locale: string, timeZone: s
   return rows;
 }
 
-function renderStatus(state: RaccoonState, notice: RuntimeNotice, locale: string, timeZone: string): string {
+function renderStatus(state: RaccoonState, notice: RuntimeNotice): string {
   if (notice === 'state') return 'Local state unavailable · cached status may be incomplete';
   if (state.consecutiveFailures >= 3) return 'Feed offline · showing cached posts';
   if (state.consecutiveFailures > 0) return 'Feed unavailable · showing cached posts';
   if (state.lastSuccessAt === null) return 'Waiting for first successful refresh';
-  const timestamp = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(new Date(state.lastSuccessAt));
-  return `Last successful refresh · ${timestamp}`;
+  return `Last successful refresh · ${formatLocalTimestamp(state.lastSuccessAt)}`;
+}
+
+function formatLocalTimestamp(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
 function comparePostsNewestFirst(left: Post, right: Post): number {
