@@ -89,6 +89,40 @@ test('cancels a streamed body immediately after it crosses two MiB', async () =>
   expectFeedError(error, 'oversize');
 });
 
+test('does not let a larger maxBytes override loosen the hard two MiB cap', async () => {
+  const response = new Response('', { headers: { 'content-length': String(MAX_BYTES + 1) } });
+  const error = await captureError(fetchDayclawPosts({
+    fetchImpl: async () => response,
+    maxBytes: MAX_BYTES + 1,
+  }));
+
+  expect(response.bodyUsed).toBe(false);
+  expectFeedError(error, 'oversize');
+});
+
+test('rejects non-finite maxBytes values without making a request', async () => {
+  let requests = 0;
+  const fetchImpl = async () => {
+    requests += 1;
+    return jsonResponse({ items: [] });
+  };
+
+  const infinityError = await captureError(fetchDayclawPosts({ fetchImpl, maxBytes: Infinity }));
+  const nanError = await captureError(fetchDayclawPosts({ fetchImpl, maxBytes: Number.NaN }));
+
+  expect(requests).toBe(0);
+  expectFeedError(infinityError, 'malformed');
+  expectFeedError(nanError, 'malformed');
+});
+
+test('maps invalid UTF-8 response bytes to a safe malformed error', async () => {
+  const error = await captureError(fetchDayclawPosts({
+    fetchImpl: async () => new Response(new Uint8Array([0xff])),
+  }));
+
+  expectFeedError(error, 'malformed');
+});
+
 test('maps invalid JSON to a safe malformed error', async () => {
   const error = await captureError(fetchDayclawPosts({ fetchImpl: async () => new Response('{not json') }));
   expectFeedError(error, 'malformed');

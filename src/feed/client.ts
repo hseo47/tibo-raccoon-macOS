@@ -25,9 +25,9 @@ export async function fetchDayclawPosts(options: {
   timeoutMs?: number;
   maxBytes?: number;
 } = {}): Promise<Post[]> {
+  const maxBytes = resolveMaxBytes(options.maxBytes);
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -104,7 +104,21 @@ async function readBody(response: Response, maxBytes: number): Promise<string> {
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder('utf-8', { fatal: true }).decode(body);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(body);
+  } catch {
+    throw malformedError();
+  }
+}
+
+function resolveMaxBytes(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_MAX_BYTES;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw malformedError();
+  }
+  return Math.min(value, DEFAULT_MAX_BYTES);
 }
 
 function timeoutError(): FeedError {
