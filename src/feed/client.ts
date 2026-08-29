@@ -52,6 +52,9 @@ export async function fetchDayclawPosts(options: {
       if (error instanceof FeedError) {
         throw error;
       }
+      if (controller.signal.aborted) {
+        throw timeoutError();
+      }
       throw networkError();
     }
 

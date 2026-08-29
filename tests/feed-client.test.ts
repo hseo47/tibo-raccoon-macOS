@@ -89,6 +89,36 @@ test('cancels a streamed body immediately after it crosses two MiB', async () =>
   expectFeedError(error, 'oversize');
 });
 
+test('maps an abort during streamed-body consumption to a safe timeout error', async () => {
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamController = controller;
+    },
+  });
+  const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+    init?.signal?.addEventListener('abort', () => {
+      streamController?.error(new DOMException('stream abort detail', 'AbortError'));
+    }, { once: true });
+    return new Response(stream);
+  };
+
+  const error = await captureError(fetchDayclawPosts({ fetchImpl, timeoutMs: 1 }));
+
+  expectFeedError(error, 'timeout');
+});
+
+test('maps a non-abort streamed-body failure to a safe network error', async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error('stream failed at https://example.test/?token=private'));
+    },
+  });
+  const error = await captureError(fetchDayclawPosts({ fetchImpl: async () => new Response(stream) }));
+
+  expectFeedError(error, 'network');
+});
+
 test('does not let a larger maxBytes override loosen the hard two MiB cap', async () => {
   const response = new Response('', { headers: { 'content-length': String(MAX_BYTES + 1) } });
   const error = await captureError(fetchDayclawPosts({
