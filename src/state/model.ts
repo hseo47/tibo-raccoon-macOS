@@ -1,5 +1,5 @@
 import type { FeedErrorKind, Post, RaccoonState } from '../domain';
-import { parseRfc3339 } from '../feed/normalize';
+import { parseRfc3339, sanitizePostUrl } from '../feed/normalize';
 
 const MAX_READ_POSTS = 100;
 const ERROR_KINDS: ReadonlySet<FeedErrorKind> = new Set(['timeout', 'http', 'oversize', 'malformed', 'network']);
@@ -48,6 +48,10 @@ export function parseState(value: unknown): RaccoonState {
 
   const cachedPosts = parsePosts(value.cachedPosts);
   if (cachedPosts.some(({ id }) => !knownIdSet.has(id))) {
+    throw new Error('Invalid state');
+  }
+  const cachedIdSet = new Set(cachedPosts.map(({ id }) => id));
+  if ([...unreadIdSet].some((id) => !cachedIdSet.has(id))) {
     throw new Error('Invalid state');
   }
 
@@ -152,17 +156,20 @@ function parsePosts(value: unknown): Post[] {
   }
   const posts: Post[] = [];
   for (const item of value) {
-    const publishedAt = item !== null && isRecord(item) ? parseOptionalTimestamp(item.publishedAt) : null;
+    if (!isRecord(item)) {
+      throw new Error('Invalid state');
+    }
+    const publishedAt = parseOptionalTimestamp(item.publishedAt);
+    const url = item.url === null ? null : sanitizePostUrl(item.url);
     if (
-      !isRecord(item) ||
       typeof item.id !== 'string' || item.id.length === 0 ||
       typeof item.text !== 'string' ||
       (item.publishedAt !== null && publishedAt === null) ||
-      (item.url !== null && typeof item.url !== 'string')
+      (item.url !== null && url === null)
     ) {
       throw new Error('Invalid state');
     }
-    posts.push({ id: item.id, text: item.text, publishedAt, url: item.url as string | null });
+    posts.push({ id: item.id, text: item.text, publishedAt, url });
   }
   return firstPostsById(posts);
 }

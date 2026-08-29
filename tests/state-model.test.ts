@@ -156,6 +156,20 @@ test('parseState validates post fields and timestamp fields', () => {
   expect(() => parseState(stateWith({ cachedPosts: [{ ...post('1'), url: 3 as unknown as string }] }))).toThrow();
 });
 
+test('parseState rejects persisted post URLs outside the validated X/Twitter HTTPS boundary', () => {
+  for (const url of [
+    'https://example.invalid/post/1',
+    'https://user:password@x.com/thsottiaux/status/1',
+    'http://x.com/thsottiaux/status/1',
+  ]) {
+    expect(() => parseState(stateWith({ knownIds: ['1'], cachedPosts: [post('1', { url })] }))).toThrow();
+  }
+});
+
+test('parseState rejects unread IDs without cached posts', () => {
+  expect(() => parseState(stateWith({ knownIds: ['u'], unreadIds: ['u'], cachedPosts: [] }))).toThrow();
+});
+
 test('parseState normalizes known IDs, cached posts, unread IDs, and cache retention', () => {
   const parsed = parseState(stateWith({
     knownIds: ['z', 'a', 'z'],
