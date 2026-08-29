@@ -62,21 +62,37 @@ function expectedRgba(state: 'calm' | 'unread' | 'offline', appearance: 'light' 
 
 type ParsedChunk = { readonly name: string; readonly data: Uint8Array; readonly crc: number };
 
+const CRC32_NIBBLE_TABLE = Uint32Array.of(
+  0x00000000, 0x1db71064, 0x3b6e20c8, 0x26d930ac,
+  0x76dc4190, 0x6b6b51f4, 0x4db26158, 0x5005713c,
+  0xedb88320, 0xf00f9344, 0xd6d6a3e8, 0xcb61b38c,
+  0x9b64c2b0, 0x86d3d2d4, 0xa00ae278, 0xbdbdf21c,
+);
+
 function testCrc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (-(crc & 1) & 0xedb88320);
+    crc = CRC32_NIBBLE_TABLE[(crc ^ byte) & 0x0f]! ^ (crc >>> 4);
+    crc = CRC32_NIBBLE_TABLE[(crc ^ (byte >>> 4)) & 0x0f]! ^ (crc >>> 4);
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
 
 function testAdler32(bytes: Uint8Array): number {
+  const modulus = 65521;
   let a = 1;
   let b = 0;
-  for (const byte of bytes) {
-    a = (a + byte) % 65521;
-    b = (b + a) % 65521;
+  for (let offset = 0; offset < bytes.length; offset += 5552) {
+    const block = bytes.subarray(offset, Math.min(offset + 5552, bytes.length));
+    let sum = 0;
+    let weightedSum = 0;
+    for (let index = 0; index < block.length; index++) {
+      const byte = block[index]!;
+      sum += byte;
+      weightedSum += (block.length - index) * byte;
+    }
+    b = (b + block.length * a + weightedSum) % modulus;
+    a = (a + sum) % modulus;
   }
   return ((b << 16) | a) >>> 0;
 }
@@ -102,6 +118,14 @@ function parsePng(png: Uint8Array): ParsedChunk[] {
   expect(offset).toBe(png.length);
   return chunks;
 }
+
+test('independent checksum oracles match fixed standard vectors', () => {
+  const encoder = new TextEncoder();
+  expect(testCrc32(new Uint8Array())).toBe(0x00000000);
+  expect(testCrc32(encoder.encode('123456789'))).toBe(0xcbf43926);
+  expect(testAdler32(new Uint8Array())).toBe(0x00000001);
+  expect(testAdler32(encoder.encode('123456789'))).toBe(0x091e01de);
+});
 
 test('renders the approved 39 by 29 round-cheek silhouette on transparency', () => {
   const rgba = renderRaccoonRgba('calm', 'light');
