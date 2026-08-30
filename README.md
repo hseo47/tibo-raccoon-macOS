@@ -42,37 +42,52 @@ Tibo Raccoon's own source installer does not need Homebrew, Xcode, administrator
 
 ## Install from source
 
-1. Download or clone this repository.
-2. Open SwiftBar once and select or confirm the plugin folder it watches.
-3. Open Terminal in the downloaded repository folder.
-4. Install the source-build dependencies:
+First, open SwiftBar once and select or confirm the plugin folder it watches. The copy-paste installation below assumes that folder is `~/Documents/SwiftBar Plugins`. If you chose a different folder, replace that path in the final command.
 
-   ```sh
-   bun install
-   ```
-
-5. Run the installer and paste the absolute SwiftBar plugin-folder path when prompted:
-
-   ```sh
-   bun --no-install run install:plugin
-   ```
-
-   Example response:
-
-   ```text
-   /Users/your-name/Documents/SwiftBar Plugins
-   ```
-
-6. In SwiftBar, choose **Refresh All**.
-
-For a noninteractive installation, provide the directory directly. Replace this example if SwiftBar watches a different folder:
+After installing Bun, open a new Terminal window and confirm this prints a version:
 
 ```sh
+bun --version
+```
+
+### Copy-paste installation
+
+This path uses macOS's built-in download and archive tools, so it does not require Git or GitHub CLI. Paste the complete block into Terminal:
+
+```sh
+cd "$HOME/Downloads"
+
+curl -fL --retry 5 \
+  --output tibo-raccoon-v0.1.0.zip \
+  https://github.com/hseo47/tibo-raccoon-macOS/archive/refs/tags/v0.1.0.zip
+
+unzip -q tibo-raccoon-v0.1.0.zip
+cd tibo-raccoon-macOS-0.1.0
+
+bun install --frozen-lockfile
 bun --no-install run install:plugin -- \
   --plugin-dir "$HOME/Documents/SwiftBar Plugins"
 ```
 
-The plugin directory must already exist. At the interactive prompt, paste the complete `/Users/...` path. In a shell command, `$HOME/...` is supported; a literal `~/...` path is never accepted. Spaces in the SwiftBar plugin-folder path are supported, but the Bun executable's own path cannot contain whitespace in the current release.
+The `curl` command downloads the tagged Tibo Raccoon source, and `unzip` extracts it. Only after those steps does `bun install` download the locked source-build dependencies. The final command builds and installs the SwiftBar plugin.
+
+In SwiftBar, choose **Refresh All** after the installer finishes.
+
+### Choose a different SwiftBar folder
+
+The plugin directory must already exist and must be the exact folder SwiftBar watches. To choose it interactively, run this from the extracted `tibo-raccoon-macOS-0.1.0` folder:
+
+```sh
+bun --no-install run install:plugin
+```
+
+At the prompt, paste the complete `/Users/...` path, for example:
+
+```text
+/Users/your-name/Documents/SwiftBar Plugins
+```
+
+At the interactive prompt, a literal `$HOME/...` or `~/...` path is not expanded. In a shell command, `$HOME/...` is supported because the shell expands it first. Spaces in the SwiftBar plugin-folder path are supported, but the Bun executable's own path cannot contain whitespace in the current release.
 
 Installation builds and verifies one executable file, then places it in the selected folder with mode `0755`:
 
@@ -80,7 +95,7 @@ Installation builds and verifies one executable file, then places it in the sele
 tibo-raccoon.2m.js
 ```
 
-The file contains its exact Bun interpreter path, SwiftBar metadata, runtime code, and all six raccoon images. The installer itself does not install Bun, SwiftBar, Homebrew, services, login items, or administrator-level components; `bun install` is the separate dependency step above.
+The file contains its exact Bun interpreter path, SwiftBar metadata, runtime code, and all six raccoon images. The installer itself does not install Bun, SwiftBar, Homebrew, services, login items, or administrator-level components; `bun install --frozen-lockfile` is the separate dependency step above.
 
 ### First refresh
 
@@ -105,7 +120,7 @@ When the feed supplies no text, the preview says **New media post from Tibo**. T
 Pull or download the newest source, open Terminal in the repository folder, and run:
 
 ```sh
-bun install
+bun install --frozen-lockfile
 bun --no-install run install:plugin
 ```
 
