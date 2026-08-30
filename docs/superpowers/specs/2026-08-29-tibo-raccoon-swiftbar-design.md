@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: Approved by the user on 2026-08-29; unread flame-eye amendment approved on 2026-08-29; calm-state drip and smaller-readable-menu amendments approved on 2026-08-30
+Status: Approved by the user on 2026-08-29; unread flame-eye amendment approved on 2026-08-29; calm-state drip, smaller-readable-menu, and Dayclaw timestamp-compatibility amendments approved on 2026-08-30
 
 ## Summary
 
@@ -187,7 +187,7 @@ Normalization rules are explicit:
 
 - ID is the first non-empty string from `external_id`, `id`, then `source_id`.
 - Text is the first non-empty string from `content`, `text`, then `title`. If the recognized text fields are present but empty, the normalized text is an empty string, which is valid for media-only or otherwise textless posts. Text longer than 32,768 Unicode code points makes the response malformed.
-- Timestamp is the first strictly valid RFC 3339 string from `published_at`, `publishedAt`, `created_at`, then `createdAt`. It must contain a timezone (`Z` or numeric offset), is normalized to UTC for storage and ordering, and is converted to local time only for display. Impossible dates, ambiguous timezone-free strings, and absent timestamps become `null` and render as **Time unavailable**.
+- Timestamp is the first valid candidate from `published_at`, `publishedAt`, `created_at`, then `createdAt`. Timezone-bearing candidates must be strict RFC 3339 and are normalized to UTC for storage and ordering. The fixed Dayclaw X feed currently emits `published_at` as an otherwise exact RFC 3339 date-time without a zone; because those values match the UTC instants encoded by the corresponding X post IDs, that exact snake-case form alone is interpreted as UTC. The public `parseRfc3339` contract and all other timestamp fields remain timezone-strict. Impossible dates, other timezone-free strings, and absent timestamps become `null` and render as **Time unavailable**. Display converts accepted UTC timestamps to local time.
 - URL is read only from the source item's `url` field. It is accepted only when it is HTTPS, contains no username or password, uses no non-default port, and its normalized hostname is `x.com`, `www.x.com`, `twitter.com`, or `www.twitter.com`. Otherwise it becomes `null`, and the post renders **Full post link unavailable** rather than a clickable action.
 - Source author fields are not trusted for routing; the fixed feed URL defines the watched account.
 
@@ -326,7 +326,7 @@ Deterministic Bun tests use local fixtures and temporary state directories. They
 - new-ID detection, duplicate suppression, stable newest-first ordering, and same-time tie-breaking;
 - all-unread retention and recent-read history pruning;
 - **Mark all as read**, including a simulated concurrent fetch merge;
-- text, mixed-media-shaped, empty-text/media-only, strict RFC 3339, missing-time, and invalid-item payloads;
+- text, mixed-media-shaped, empty-text/media-only, strict RFC 3339, the exact Dayclaw timezone-less `published_at` UTC compatibility case, missing-time, and invalid-item payloads;
 - all accepted response envelopes, size/item/text limits, redirect rejection, and malformed-envelope rejection;
 - SwiftBar escaping, multiline wrapping, separator injection, exact URL-field handling, and URL allowlisting;
 - backoff progression, 30-second duplicate suppression, manual bypass, recovery, and cached-state preservation;

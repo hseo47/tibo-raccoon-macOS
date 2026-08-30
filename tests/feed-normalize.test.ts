@@ -68,6 +68,23 @@ describe('normalizeDayclawPayload', () => {
     expect(posts.map(({ id }) => id)).toEqual(['z', 'a', 'older', 'no-time-z', 'no-time-a']);
   });
 
+  test('treats only timezone-less Dayclaw published_at as UTC', () => {
+    const posts = normalizeDayclawPayload({
+      items: [
+        { id: 'dayclaw', content: 'current feed shape', published_at: '2026-08-29T21:23:38' },
+        { id: 'camel', content: 'unsupported ambiguous shape', publishedAt: '2026-08-29T21:23:38' },
+        { id: 'invalid', content: 'impossible date', published_at: '2026-02-30T21:23:38' },
+      ],
+    });
+
+    expect(posts).toEqual([
+      { id: 'dayclaw', text: 'current feed shape', publishedAt: '2026-08-29T21:23:38.000Z', url: null },
+      { id: 'invalid', text: 'impossible date', publishedAt: null, url: null },
+      { id: 'camel', text: 'unsupported ambiguous shape', publishedAt: null, url: null },
+    ]);
+    expect(parseRfc3339('2026-08-29T21:23:38')).toBeNull();
+  });
+
   test('orders equal and unavailable timestamps by descending UTF-16 opaque IDs', () => {
     const posts = normalizeDayclawPayload({
       items: [

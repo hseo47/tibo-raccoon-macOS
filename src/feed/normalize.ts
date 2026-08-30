@@ -4,6 +4,7 @@ const MAX_ITEMS = 500;
 const MAX_TEXT_CODE_POINTS = 32_768;
 const ALLOWED_POST_HOSTS = new Set(['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com']);
 const RFC_3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+const DAYCLAW_UTC_WITHOUT_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
 
 export class PayloadError extends Error {
   readonly publicMessage = 'Malformed feed payload';
@@ -125,12 +126,22 @@ function firstNonEmptyString(item: Record<string, unknown>, keys: readonly strin
 
 function firstValidTimestamp(item: Record<string, unknown>): string | null {
   for (const key of ['published_at', 'publishedAt', 'created_at', 'createdAt']) {
-    const timestamp = parseRfc3339(item[key]);
+    const timestamp = key === 'published_at'
+      ? parseDayclawPublishedAt(item[key])
+      : parseRfc3339(item[key]);
     if (timestamp !== null) {
       return timestamp;
     }
   }
   return null;
+}
+
+function parseDayclawPublishedAt(value: unknown): string | null {
+  const strict = parseRfc3339(value);
+  if (strict !== null || typeof value !== 'string' || !DAYCLAW_UTC_WITHOUT_ZONE.test(value)) {
+    return strict;
+  }
+  return parseRfc3339(`${value}Z`);
 }
 
 function isValidCalendarDate(year: number, month: number, day: number): boolean {

@@ -33,7 +33,7 @@
 | --- | --- |
 | `package.json`, `bun.lock`, `tsconfig.json` | Reproducible Bun scripts and strict TypeScript settings; dev dependencies only. |
 | `src/domain.ts` | Shared immutable types, constants, error categories, and clock interface. |
-| `src/feed/normalize.ts` | Strict Dayclaw envelope/item normalization, RFC 3339 validation, URL allowlisting, and deterministic ordering. |
+| `src/feed/normalize.ts` | Strict Dayclaw envelope/item normalization, RFC 3339 validation with a narrow timezone-less `published_at` UTC adapter, URL allowlisting, and deterministic ordering. |
 | `src/feed/client.ts` | Fixed-origin HTTPS fetch, redirect/timeout/body-size policy, JSON parsing, and sanitized feed errors. |
 | `src/artwork/grid.ts` | Approved 31×23 palettes and ordered integer spans for calm, unread, and offline raccoons. |
 | `src/artwork/png.ts` | Pure RGBA rasterization and deterministic PNG encoding with stored DEFLATE blocks. |
@@ -103,7 +103,7 @@ Create `tsconfig.json` with `strict`, `noUncheckedIndexedAccess`, `exactOptional
 
 - [ ] **Step 2: Write failing normalization tests and realistic local fixtures**
 
-The tests must cover all four accepted envelopes, first-occurrence duplicate handling, external-ID precedence, absent/empty text, media-only fallback input, strict RFC 3339 including impossible dates, deterministic ordering, a 501-item rejection, text over 32,768 code points, and URL rejection for credentials, ports, HTTP, suffix attacks, and unrelated hosts.
+The tests must cover all four accepted envelopes, first-occurrence duplicate handling, external-ID precedence, absent/empty text, media-only fallback input, strict RFC 3339 including impossible dates, the exact timezone-less Dayclaw `published_at` UTC compatibility case without loosening other fields, deterministic ordering, a 501-item rejection, text over 32,768 code points, and URL rejection for credentials, ports, HTTP, suffix attacks, and unrelated hosts.
 
 ```ts
 import { describe, expect, test } from 'bun:test';

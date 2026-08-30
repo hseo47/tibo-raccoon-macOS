@@ -65,6 +65,32 @@ test('normalizer, state, and menu share the UTF-16 opaque-ID ordering contract',
   expect(selectMenuPosts(state).map(({ id }) => id)).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
 });
 
+test('timezone-less Dayclaw published_at backfills a known cached post without re-alerting', () => {
+  const id = '2093811840258293947';
+  const baseline = applySuccessfulPoll(
+    createInitialState(),
+    [post(id, { text: 'cached text', publishedAt: null })],
+    '2026-08-29T22:00:00.000Z',
+  );
+  const normalized = normalizeDayclawPayload({
+    items: [{
+      external_id: id,
+      content: 'refreshed text',
+      published_at: '2026-08-29T21:23:38',
+      url: `https://x.com/thsottiaux/status/${id}`,
+    }],
+  });
+  const refreshed = applySuccessfulPoll(baseline, normalized, '2026-08-29T22:02:00.000Z');
+
+  expect(normalized).toEqual([post(id, {
+    text: 'refreshed text',
+    publishedAt: '2026-08-29T21:23:38.000Z',
+  })]);
+  expect(refreshed.cachedPosts).toEqual(normalized);
+  expect(refreshed.knownIds).toEqual([id]);
+  expect(refreshed.unreadIds).toEqual([]);
+});
+
 function acceptanceHarness(options: { baseline: Post[] }): Promise<AcceptanceHarness> {
   return createAcceptanceHarness(options);
 }
