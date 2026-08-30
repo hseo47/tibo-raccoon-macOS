@@ -33,6 +33,34 @@ const metadata = [
   '// <swiftbar.runInBash>false</swiftbar.runInBash>',
 ] as const;
 
+const hiddenDefaultItemsMetadata = [
+  '// <swiftbar.hideAbout>true</swiftbar.hideAbout>',
+  '// <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>',
+  '// <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>',
+  '// <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>',
+  '// <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>',
+] as const;
+
+test('built artifact hides every SwiftBar-provided footer item during normal clicks', async () => {
+  const buildDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-build-'));
+  const output = join(buildDirectory, 'tibo-raccoon.2m.js');
+
+  try {
+    await buildPlugin({ output, bunPath: process.execPath });
+    const source = await readFile(output, 'utf8');
+    const artifactLines = source.split('\n');
+    const metadataEnd = artifactLines.findIndex((line, index) => index > 0 && !line.startsWith('// <'));
+    expect(metadataEnd).toBeGreaterThan(1);
+    const metadataBlock = artifactLines.slice(1, metadataEnd);
+
+    for (const line of hiddenDefaultItemsMetadata) {
+      expect(metadataBlock.filter((candidate) => candidate === line)).toHaveLength(1);
+    }
+  } finally {
+    await rm(buildDirectory, { recursive: true, force: true });
+  }
+});
+
 test('builds one directly executable SwiftBar artifact and maps every runtime icon exactly', async () => {
   const buildDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-build-'));
   const secondBuildDirectory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-build-'));

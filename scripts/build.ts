@@ -24,6 +24,11 @@ const metadataFor = (bunPath: string): string => [
   "// <xbar.desc>Watch Tibo's public posts from the macOS menu bar.</xbar.desc>",
   '// <xbar.dependencies>bun,swiftbar</xbar.dependencies>',
   '// <swiftbar.runInBash>false</swiftbar.runInBash>',
+  '// <swiftbar.hideAbout>true</swiftbar.hideAbout>',
+  '// <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>',
+  '// <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>',
+  '// <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>',
+  '// <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>',
   '',
 ].join('\n');
 
