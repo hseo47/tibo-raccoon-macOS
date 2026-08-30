@@ -35,14 +35,14 @@
 | `src/domain.ts` | Shared immutable types, constants, error categories, and clock interface. |
 | `src/feed/normalize.ts` | Strict Dayclaw envelope/item normalization, RFC 3339 validation, URL allowlisting, and deterministic ordering. |
 | `src/feed/client.ts` | Fixed-origin HTTPS fetch, redirect/timeout/body-size policy, JSON parsing, and sanitized feed errors. |
-| `src/artwork/grid.ts` | Approved 39×29 palettes and ordered integer spans for calm, unread, and offline raccoons. |
+| `src/artwork/grid.ts` | Approved 31×23 palettes and ordered integer spans for calm, unread, and offline raccoons. |
 | `src/artwork/png.ts` | Pure RGBA rasterization and deterministic PNG encoding with stored DEFLATE blocks. |
 | `src/generated/icons.ts` | Generated Base64 constants and SHA-256 hashes for all six icons. |
 | `assets/icons/*.png`, `assets/icons/sha256.json` | Canonical checked-in PNG bytes and hash manifest. |
 | `src/state/model.ts` | Pure initialization, merge, unread/read, pruning, success, failure, and state-validation transitions. |
 | `src/state/store.ts` | Default paths, private permissions, owner-aware lock, corrupt-state quarantine, and atomic writes. |
 | `src/poll.ts` | Scheduled/forced polling, 30-second duplicate guard, backoff checks, and fetch-outside-lock coordination. |
-| `src/swiftbar/render.ts` | Icon selection, safe wrapping/escaping, post selection, timestamp/status formatting, and menu actions. |
+| `src/swiftbar/render.ts` | Icon selection, safe four-row thought-bubble previews, post selection, timestamp/status formatting, and menu actions. |
 | `src/cli.ts` | Exact no-argument, `mark-read`, and `refresh-now` command contract with injected dependencies. |
 | `src/main.ts` | Production dependency wiring, test-only path override, stdout/stderr, and exit codes. |
 | `scripts/generate-icons.ts` | Regenerate canonical PNGs, manifest, and generated Base64 module. |
@@ -836,7 +836,7 @@ function renderStatus(state: RaccoonState, notice: RuntimeNotice): string;
 
 Inside `renderSwiftBarMenu`, set `icon = chooseIconState(state)`, `quotedPluginPath = quoteSwiftBarParam(pluginPath)`, and `renderedPostRows = selectMenuPosts(state).flatMap(...)` before constructing `lines`.
 
-Normalize CRLF, replace tabs with spaces, remove other C0/C1 controls, visibly replace `|` with `｜`, replace a visual row equal to `---` with `— — —`, and split at 72 Unicode code points without dropping any remaining text. Render text/status rows without action parameters. Quote the hard-coded absolute plugin path for SwiftBar and escape backslash and apostrophe; never pass feed text to parameter formatting.
+Normalize CRLF, replace tabs with spaces, remove other C0/C1 controls, visibly replace `|` with `｜`, replace a visual row equal to `---` with `— — —`, and split at 54 Unicode code points. Render at most four thought-bubble preview rows; if additional text remains, replace the final code point of a full fourth row—or append to a shorter fourth logical row—with one Unicode ellipsis. Append only trusted light/dark color and size parameters to preview rows. Quote the hard-coded absolute plugin path for SwiftBar and escape backslash and apostrophe; never pass feed text to parameter formatting.
 
 Build the output from computed values in this exact order:
 
@@ -854,7 +854,7 @@ const lines = [
 ];
 ```
 
-If text is empty, emit **New media post from Tibo**. If URL is null, emit **Original link unavailable** without `href`. If `notice === 'state'`, the final status row is **Local state unavailable · cached status may be incomplete**. Do not mark posts read in this module.
+If text is empty, emit **New media post from Tibo**. If URL is null, emit **Full post link unavailable** without `href`. If `notice === 'state'`, the final status row is **Local state unavailable · cached status may be incomplete**. Do not mark posts read in this module.
 
 - [ ] **Step 4: Run renderer/artwork/model tests and type checking**
 

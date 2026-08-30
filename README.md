@@ -39,9 +39,11 @@ The command explicitly disables Bun auto-install, builds one `tibo-raccoon.2m.js
 - Unread: flame eyes with a muted oxide-red corner frame. Unread has priority over offline.
 - Offline: closed eyes after three consecutive failed feed attempts when there are no unread cached posts.
 
+All three menu-bar images are crisp 31×23 pixel assets, about 80% of the original raccoon size.
+
 The menu shows `Tibo Raccoon · N unread`. **Mark all as read** clears only the unread IDs currently persisted at the moment you choose it; opening a post never clears it, and later newly observed posts stay unread.
 
-Posts are shown newest first. Ordinary text posts display Tibo's source text without summarization or semantic rewriting. An empty-text item is shown as **New media post from Tibo** and may include its validated original link. The plugin never renders, downloads, infers, or analyzes media.
+Posts are shown newest first in high-contrast thought-bubble groups. Each group shows up to four 54-code-point rows copied verbatim from Tibo's text; longer posts end with an ellipsis and link to the complete original on X. The plugin never summarizes or semantically rewrites the preview. An empty-text item is shown as **New media post from Tibo** and may include its validated original link. The plugin never renders, downloads, infers, or analyzes media.
 
 ## Privacy and limits
 

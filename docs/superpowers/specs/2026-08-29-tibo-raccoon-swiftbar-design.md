@@ -2,11 +2,11 @@
 
 Date: 2026-08-29
 
-Status: Approved by the user on 2026-08-29; unread flame-eye amendment approved on 2026-08-29; calm-state drip amendment approved on 2026-08-30
+Status: Approved by the user on 2026-08-29; unread flame-eye amendment approved on 2026-08-29; calm-state drip and smaller-readable-menu amendments approved on 2026-08-30
 
 ## Summary
 
-Tibo Raccoon is a small SwiftBar plugin that watches the public Dayclaw feed for Tibo's X account (`@thsottiaux`). It shows a chubby pixel raccoon in the macOS menu bar, keeps every newly observed post unread until the user explicitly marks posts as read, and displays the original post text and link in the dropdown.
+Tibo Raccoon is a small SwiftBar plugin that watches the public Dayclaw feed for Tibo's X account (`@thsottiaux`). It shows a chubby pixel raccoon in the macOS menu bar, keeps every newly observed post unread until the user explicitly marks posts as read, and displays a verbatim preview plus the original post link in the dropdown.
 
 The plugin does not attempt to decide which posts hint at a Codex reset. Tibo's hints are too nuanced for a reliable filter, and a false negative would defeat the purpose of the tool. Every newly returned post is therefore treated as relevant.
 
@@ -15,7 +15,7 @@ The plugin does not attempt to decide which posts hint at a Codex reset. Tibo's 
 - Check Tibo's public feed every two minutes without requiring an X account.
 - Make new posts visible through a discreet but unmistakable raccoon state.
 - Preserve the unread state until the user selects **Mark all as read**.
-- Show exact post text, publication time, and a safe link to the original post.
+- Show a verbatim four-row post preview, publication time, and a safe link to the complete original post.
 - Handle text-only, mixed-media, and media-only posts without pretending media metadata is available when it is not.
 - Continue showing useful cached information during network or feed failures.
 - Install as a conventional SwiftBar plugin with Bun as its only runtime dependency.
@@ -59,7 +59,7 @@ The release artifact embeds light- and dark-appearance PNGs as Base64 and passes
 
 #### Approved pixel-art source of truth
 
-The temporary browser mockups are not repository assets. To preserve the approved design, the build-time artwork uses a 39×29 grid and these exact palette values:
+The temporary browser mockups are not repository assets. To preserve the approved design at roughly 80% of its original menu-bar size, the build-time artwork uses a 31×23 grid and these exact palette values:
 
 | Role | Light | Dark |
 | --- | --- | --- |
@@ -72,39 +72,39 @@ The temporary browser mockups are not repository assets. To preserve the approve
 | Flame core | `#ffc247` | `#ffd166` |
 | Unread frame | `#9a4d49` | `#cc7a74` |
 
-The shared chubby silhouette, round cheeks, mask, and nose use this SVG-grid geometry; the asset builder rasterizes it without smoothing:
+The shared chubby silhouette, round cheeks, mask, and nose use these inclusive pixel spans; the asset builder rasterizes them without smoothing:
 
 ```text
-ears:       M5 4h7v5H5z M27 4h7v5h-7z
-silhouette: M9 5h21v2h4v3h2v10h-2v3h-4v3h-6v2h-9v-2H9v-3H5v-3H3V10h2V7h4z
-mask:       M7 10h9v8H7z M23 10h9v8h-9z
-nose:       M17 18h5v3h-5z
+ears:       y3-6: x4-9 and x21-26
+fur:        y4-5: x7-23; y6-7: x4-26; y8-15: x2-28;
+            y16-17: x4-26; y18-20: x7-23; y21-22: x12-18
+mask:       y8-13: x5-12 and x18-25
+nose:       y14-16: x13-17
 ```
 
 The state-specific eyes and frame are:
 
 ```text
-calm face:    M10 13h3v2h-3z M26 13h3v2h-3z
-calm eyes:    M11 14h2v1h-2z M26 14h2v1h-2z
-calm drip:    M21 21h1v3h-1z M21 24h2v1h-2z
-offline face: M10 13h3v2h-3z M26 13h3v2h-3z
-offline eyes: M10 14h3v1h-3z M26 14h3v1h-3z
-oxide frame:  M1 5h5v1H2v4H1z M33 5h5v5h-1V6h-4z M1 22h1v4h4v1H1z M37 22h1v5h-5v-1h4z
+calm face:    y10-11: x8-10 and x20-22
+calm eyes:    y11: x9-10 and x20-21
+calm drip:    y17-19: x17; y20: x17-18
+offline face: y10-11: x8-10 and x20-22
+offline eyes: y11: x8-10 and x20-22
+oxide frame:  y4: x1-4 and x26-29; y5-7: x1 and x29;
+              y17-20: x1 and x29; y21: x1-4 and x26-29
 ```
 
-The unread left flame is defined by these inclusive row spans; the right flame mirrors each span horizontally with `mirroredX = 38 - x`:
+The unread left flame is defined by these inclusive row spans; the right flame mirrors each span horizontally with `mirroredX = 30 - x`:
 
 ```text
-outline: y7:12-12, y8:11-13, y9:10-13, y10:10-14, y11:9-14,
-         y12:9-14, y13:9-13, y14:10-13, y15:10-12
-outer:   y8:12-12, y9:11-12, y10:11-13, y11:10-13,
-         y12:10-13, y13:10-12, y14:11-12
-core:    y10:12-12, y11:11-12, y12:11-12, y13:11-11
+outline: y5:10, y6:9-10, y7:8-11, y8-10:7-11, y11:8-11, y12:9-10
+outer:   y6:10, y7:9-10, y8-10:8-10, y11:9-10
+core:    y8:10, y9:9-10, y10:9
 ```
 
 The outline uses the eyes/nose color, followed by flame outer and flame core. Calm keeps the shorter, lower pupils approved in the visual review and alone receives the solid-color drip: one pixel wide for three rows below the viewer-right nose edge, ending in a two-pixel foot. Unread and offline never receive the drip. Offline keeps the same face and cheeks but turns each eye into a horizontal closed line. No envelope, circular dot, numeric badge, filled red field, or animation is part of any state.
 
-Each canonical image is exactly 39×29 physical pixels with a transparent background. Rectangles are filled on integer coordinates in this order: ears, silhouette, masks, state-specific face/eye or flame outline, flame outer, flame core, eyes/nose, the calm drip, then unread frame. No antialiasing, resampling, color profiles, or semitransparent pixels are allowed. The PNG encoding is deterministic: 8-bit RGBA, non-interlaced, filter type 0 on every row, one `IDAT` chunk using stored (uncompressed) DEFLATE blocks, and only `IHDR`, `IDAT`, and `IEND` chunks. The six canonical PNGs are checked in, and both the asset generator and bundled Base64 must reproduce their SHA-256 hashes byte for byte.
+Each canonical image is exactly 31×23 physical pixels with a transparent background. Rectangles are filled on integer coordinates in this order: ears, silhouette, masks, state-specific face/eye or flame outline, flame outer, flame core, eyes/nose, the calm drip, then unread frame. No antialiasing, resampling, color profiles, or semitransparent pixels are allowed. The PNG encoding is deterministic: 8-bit RGBA, non-interlaced, filter type 0 on every row, one `IDAT` chunk using stored (uncompressed) DEFLATE blocks, and only `IHDR`, `IDAT`, and `IEND` chunks. The six canonical PNGs are checked in, and both the asset generator and bundled Base64 must reproduce their SHA-256 hashes byte for byte.
 
 ### Dropdown
 
@@ -116,11 +116,12 @@ Posts are ordered newest first. It renders every unread post, followed by enough
 
 Each post includes:
 
-- a local-time timestamp and unread/read status;
-- the source text without summarization, wrapped into safe, readable menu rows;
-- **Open original post** when the source URL passes validation.
+- a thought-bubble header with a local-time timestamp and an oxide `NEW` accent when unread;
+- up to four high-contrast, 54-code-point rows copied verbatim from the source text;
+- a single ellipsis when additional source rows are omitted;
+- **Read full post on X →** when the source URL passes validation.
 
-The plugin does not summarize or semantically rewrite Tibo's text. SwiftBar-reserved control characters are visibly substituted as described under output safety. For an empty-text post, it displays **New media post from Tibo** and the original link when valid; otherwise it displays **Original link unavailable**. If Dayclaw later exposes trustworthy media metadata, that can be considered separately; version 1 does not infer media type from missing text.
+The plugin does not summarize or semantically rewrite Tibo's text. The preview is a literal prefix, not a generated summary; the original link exposes the complete post. SwiftBar-reserved control characters are visibly substituted as described under output safety, and remote text never enables SwiftBar Markdown or parameters. For an empty-text post, it displays **New media post from Tibo** and the original link when valid; otherwise it displays **Full post link unavailable**. SwiftBar's standard menu API has no row-background or rounded-corner parameter, so trusted `╭─`, `│`, and `╰─` edges plus `quote.bubble.fill`, fixed light/dark colors, and separators provide the thought-bubble treatment. If Dayclaw later exposes trustworthy media metadata, that can be considered separately; version 1 does not infer media type from missing text.
 
 After the post list, the dropdown provides:
 
@@ -187,7 +188,7 @@ Normalization rules are explicit:
 - ID is the first non-empty string from `external_id`, `id`, then `source_id`.
 - Text is the first non-empty string from `content`, `text`, then `title`. If the recognized text fields are present but empty, the normalized text is an empty string, which is valid for media-only or otherwise textless posts. Text longer than 32,768 Unicode code points makes the response malformed.
 - Timestamp is the first strictly valid RFC 3339 string from `published_at`, `publishedAt`, `created_at`, then `createdAt`. It must contain a timezone (`Z` or numeric offset), is normalized to UTC for storage and ordering, and is converted to local time only for display. Impossible dates, ambiguous timezone-free strings, and absent timestamps become `null` and render as **Time unavailable**.
-- URL is read only from the source item's `url` field. It is accepted only when it is HTTPS, contains no username or password, uses no non-default port, and its normalized hostname is `x.com`, `www.x.com`, `twitter.com`, or `www.twitter.com`. Otherwise it becomes `null`, and the post renders **Original link unavailable** rather than a clickable action.
+- URL is read only from the source item's `url` field. It is accepted only when it is HTTPS, contains no username or password, uses no non-default port, and its normalized hostname is `x.com`, `www.x.com`, `twitter.com`, or `www.twitter.com`. Otherwise it becomes `null`, and the post renders **Full post link unavailable** rather than a clickable action.
 - Source author fields are not trusted for routing; the fixed feed URL defines the watched account.
 
 An item without a stable ID cannot be tracked safely. If any item in an otherwise recognized response lacks a stable ID or is not an object, the entire response is rejected as malformed. This avoids silently treating an incomplete payload as a successful poll. For duplicate IDs in one response, the first occurrence in the source array wins.
@@ -258,7 +259,7 @@ All content derived from the feed is data, never SwiftBar markup. The renderer:
 
 - replaces control characters and normalizes newlines before wrapping text;
 - visibly substitutes `|` and neutralizes lines equal to `---`, control characters, and other characters that could become SwiftBar parameters or separators;
-- applies a fixed maximum width per visual row without truncating the overall post text;
+- applies a fixed 54-code-point width and renders at most four preview rows, ending the fourth with a single ellipsis when text remains;
 - emits actions only from hard-coded absolute executable paths and validated HTTPS URLs;
 - never interpolates post text into `bash`, `params`, `href`, or metadata fields.
 
@@ -343,7 +344,7 @@ Version 1 is ready for a separate installation decision when all of the followin
 
 - The fixture suite and built-artifact smoke test pass.
 - A clean temporary first run shows the latest five posts as read and zero unread.
-- Adding one fixture post changes the image to the approved attentive-eye raccoon with muted oxide-red corner marks and shows its exact text.
+- Adding one fixture post changes the image to the approved flame-eye raccoon with muted oxide-red corner marks and shows its verbatim preview.
 - Empty-text posts show **New media post from Tibo** with a validated original link.
 - Unread state persists across normal refreshes, failures, process exits, and rebuilds until **Mark all as read** is invoked.
 - Three simulated failures produce the closed-eye offline state only when no unread posts exist.
@@ -358,7 +359,7 @@ Version 1 is ready for a separate installation decision when all of the followin
 - The endpoint currently exposes a limited current item set and no documented pagination/completeness guarantee. If more posts arrive between successful polls than the endpoint retains, the plugin cannot detect the omitted posts. The two-minute cadence reduces but cannot eliminate this risk.
 - Dayclaw currently provides text and an original post URL but not a dependable media payload. The plugin therefore links out for all media.
 - A media-only fallback indicates that text is absent; it does not prove which media type exists.
-- Rendering every unread post is an intentional product decision. If the user never selects **Mark all as read**, the dropdown and cached unread content can become long; version 1 does not hide or auto-clear unread posts.
+- Rendering every unread post is an intentional product decision. Each post is capped at a four-row preview, but the dropdown can still become long if the user never selects **Mark all as read**; version 1 does not hide or auto-clear unread posts.
 - `knownIds` grows with the number of posts ever observed. This is a deliberate deduplication trade-off at the expected posting volume. Version 1 provides no automatic compaction or in-menu state reset because either could re-alert old posts; removing the application-support directory is the explicit full reset.
 - X/Twitter link-host rules may need a deliberate update if canonical post URLs move to another domain.
 - There is no reset classifier by design. If classification is ever reconsidered, it must remain an optional annotation and may not hide raw posts.

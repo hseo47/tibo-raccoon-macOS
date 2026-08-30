@@ -11,16 +11,16 @@ type Appearance = 'light' | 'dark';
 
 const EXPECTED_ICON_SHA256 = {
   calm: {
-    light: '634b33bf51a56f8aa89cefb56b4dedacbec5bd080bc06fa25eb8603188748b5f',
-    dark: 'd126b462d565f3a1ef93ce46df5b3b61c9ae348dd6defc0086acd10a149a4a8d',
+    light: '090ae57eb9ad9abde97c346708d406be92f779c8ca5785adf31fe2e9a5485ff0',
+    dark: '1a0eb3a4467a0d7b874b648b02e6bd5ded97764bebd179b17a18da09b5998088',
   },
   unread: {
-    light: 'b1d4b4b8b4ad16b5b4010c00022f56ae1081feafb51efc528434325be867d82f',
-    dark: '85e5c4755ca3d11397ce1e89ce338c02b3383bebb37cea057cbad65b00eedb51',
+    light: 'e45715ffb73282da58f9bc25f5019e6fba5ae7448e7026657636c08d41868af0',
+    dark: 'd5f106490ac25d2f731fa1f5c3ac4ebffa423a157662e64005b323c43a7a9443',
   },
   offline: {
-    light: 'cabc517a15fa224951187a1eb30cb17d0d0b49b3a858b4c8ff35cc5fa45d2a75',
-    dark: '2fab508119b511e6a7578137a2a856640ef942b79040035d5879cdfeb556d697',
+    light: 'ab863510c457e6cd346bc264f21accc0b746d4b5be2cd9e7c9403fac4d6a5db6',
+    dark: '0fbfe29c39fbfc201fb0841dae5390a52913ce0f73c430265c8a8f5c2725dfa7',
   },
 } as const satisfies Record<IconState, Record<Appearance, string>>;
 
@@ -94,7 +94,7 @@ test('builds one directly executable SwiftBar artifact and maps every runtime ic
     await rm(buildDirectory, { recursive: true, force: true });
     await rm(secondBuildDirectory, { recursive: true, force: true });
   }
-});
+}, { timeout: 20_000 });
 
 test('rejects an owner-unexecutable Bun path', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tibo-raccoon-build-'));

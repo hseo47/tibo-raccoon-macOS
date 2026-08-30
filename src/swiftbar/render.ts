@@ -2,8 +2,12 @@ import { ICON_BASE64 } from '../generated/icons';
 import { compareOpaqueIds, PROFILE_URL, type IconState, type Post, type RaccoonState, type RuntimeNotice } from '../domain';
 import { quoteSwiftBarPluginPath } from './plugin-path';
 
-const DEFAULT_WRAP_WIDTH = 72;
+const DEFAULT_WRAP_WIDTH = 54;
 const DEFAULT_MINIMUM_POSTS = 5;
+const MAX_PREVIEW_ROWS = 4;
+const BODY_PARAMETERS = 'color=#1F2328,#F4F4F5 size=13';
+const READ_HEADER_PARAMETERS = 'sfimage=quote.bubble.fill sfcolor=#6F625C,#CFC5BF color=#3B3330,#F2EAE5 size=12';
+const UNREAD_HEADER_PARAMETERS = 'sfimage=quote.bubble.fill sfcolor=#9A4D49,#CC7A74 color=#7B3735,#F1AAA3 size=12';
 
 export function escapeSwiftBarTitle(value: string): string {
   const normalized = value.replace(/\r\n?|[\u2028\u2029]/g, '\n').replace(/\t/g, ' ');
@@ -61,7 +65,10 @@ export function renderSwiftBarMenu(options: {
   const quotedPluginPath = quoteSwiftBarPluginPath(pluginPath);
   const resolvedTimeZone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const unreadIds = new Set(state.unreadIds);
-  const renderedPostRows = selectMenuPosts(state).flatMap((post) => renderPostRows(post, unreadIds.has(post.id), locale, resolvedTimeZone));
+  const renderedPostRows = selectMenuPosts(state).flatMap((post, index) => [
+    ...(index === 0 ? [] : ['---']),
+    ...renderPostRows(post, unreadIds.has(post.id), locale, resolvedTimeZone),
+  ]);
   const lines = [
     `| image=${ICON_BASE64[icon].light},${ICON_BASE64[icon].dark} dropdown=false`,
     '---',
@@ -80,14 +87,29 @@ function renderPostRows(post: Post, unread: boolean, locale: string, timeZone: s
   const timestamp = post.publishedAt === null
     ? 'Time unavailable'
     : new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(new Date(post.publishedAt));
-  const textRows = post.text === '' ? ['New media post from Tibo'] : wrapPostText(post.text);
-  const rows = [`${unread ? 'Unread' : 'Read'} · ${timestamp}`, ...textRows.map((row) => `  ${row}`)];
+  const textRows = previewRows(post.text === '' ? ['New media post from Tibo'] : wrapPostText(post.text));
+  const header = unread ? `╭─ Tibo · NEW · ${timestamp}` : `╭─ Tibo · ${timestamp}`;
+  const rows = [
+    `${header} | ${unread ? UNREAD_HEADER_PARAMETERS : READ_HEADER_PARAMETERS}`,
+    ...textRows.map((row) => `│  ${row} | ${BODY_PARAMETERS}`),
+  ];
   if (post.url === null) {
-    rows.push('Original link unavailable');
+    rows.push('╰─ Full post link unavailable');
   } else {
-    rows.push(`Open original post | href=${post.url}`);
+    rows.push(`╰─ Read full post on X → | href=${post.url}`);
   }
   return rows;
+}
+
+function previewRows(rows: string[]): string[] {
+  const preview = rows.slice(0, MAX_PREVIEW_ROWS);
+  if (rows.length <= MAX_PREVIEW_ROWS) return preview;
+
+  const finalRow = Array.from(preview[MAX_PREVIEW_ROWS - 1] ?? '');
+  preview[MAX_PREVIEW_ROWS - 1] = finalRow.length >= DEFAULT_WRAP_WIDTH
+    ? `${finalRow.slice(0, DEFAULT_WRAP_WIDTH - 1).join('')}…`
+    : `${finalRow.join('')}…`;
+  return preview;
 }
 
 function renderStatus(state: RaccoonState, notice: RuntimeNotice): string {

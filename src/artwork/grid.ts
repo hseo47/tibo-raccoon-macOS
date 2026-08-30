@@ -1,7 +1,7 @@
 import type { Appearance, IconState } from '../domain';
 
-export const WIDTH = 39;
-export const HEIGHT = 29;
+export const WIDTH = 31;
+export const HEIGHT = 23;
 
 type Role = 'fur' | 'mask' | 'face' | 'eye' | 'snot' | 'flameOuter' | 'flameCore' | 'oxide';
 type Span = readonly [y: number, x0: number, x1: number, role: Role];
@@ -26,40 +26,39 @@ function mirrorSpans(spans: readonly Span[]): Span[] {
 }
 
 const SHARED: readonly Span[] = [
-  ...rows(4, 8, 5, 11, 'mask'),
-  ...rows(4, 8, 27, 33, 'mask'),
-  [5, 9, 29, 'fur'], [6, 9, 29, 'fur'],
-  [7, 5, 33, 'fur'], [8, 5, 33, 'fur'], [9, 5, 33, 'fur'],
-  ...rows(10, 19, 3, 35, 'fur'),
-  ...rows(20, 22, 5, 33, 'fur'),
-  ...rows(23, 25, 9, 29, 'fur'),
-  ...rows(26, 27, 15, 23, 'fur'),
-  ...rows(10, 17, 7, 15, 'mask'),
-  ...rows(10, 17, 23, 31, 'mask'),
+  ...rows(3, 6, 4, 9, 'mask'),
+  ...rows(3, 6, 21, 26, 'mask'),
+  ...rows(4, 5, 7, 23, 'fur'),
+  ...rows(6, 7, 4, 26, 'fur'),
+  ...rows(8, 15, 2, 28, 'fur'),
+  ...rows(16, 17, 4, 26, 'fur'),
+  ...rows(18, 20, 7, 23, 'fur'),
+  ...rows(21, 22, 12, 18, 'fur'),
+  ...rows(8, 13, 5, 12, 'mask'),
+  ...rows(8, 13, 18, 25, 'mask'),
 ];
 
-const NOSE: readonly Span[] = [...rows(18, 20, 17, 21, 'eye')];
+const NOSE: readonly Span[] = [...rows(14, 16, 13, 17, 'eye')];
 const CALM: readonly Span[] = [
-  ...rows(13, 14, 10, 12, 'face'), ...rows(13, 14, 26, 28, 'face'),
-  [14, 11, 12, 'eye'], [14, 26, 27, 'eye'],
+  ...rows(10, 11, 8, 10, 'face'), ...rows(10, 11, 20, 22, 'face'),
+  [11, 9, 10, 'eye'], [11, 20, 21, 'eye'],
 ];
 const CALM_DRIP: readonly Span[] = [
-  ...rows(21, 23, 21, 21, 'snot'), [24, 21, 22, 'snot'],
+  ...rows(17, 19, 17, 17, 'snot'), [20, 17, 18, 'snot'],
 ];
 const LEFT_FLAME_OUTLINE: readonly Span[] = [
-  [7, 12, 12, 'eye'], [8, 11, 13, 'eye'], [9, 10, 13, 'eye'],
-  [10, 10, 14, 'eye'], [11, 9, 14, 'eye'], [12, 9, 14, 'eye'],
-  [13, 9, 13, 'eye'], [14, 10, 13, 'eye'], [15, 10, 12, 'eye'],
+  [5, 10, 10, 'eye'], [6, 9, 10, 'eye'], [7, 8, 11, 'eye'],
+  [8, 7, 11, 'eye'], [9, 7, 11, 'eye'], [10, 7, 11, 'eye'],
+  [11, 8, 11, 'eye'], [12, 9, 10, 'eye'],
 ];
 const LEFT_FLAME_OUTER: readonly Span[] = [
-  [8, 12, 12, 'flameOuter'], [9, 11, 12, 'flameOuter'],
-  [10, 11, 13, 'flameOuter'], [11, 10, 13, 'flameOuter'],
-  [12, 10, 13, 'flameOuter'], [13, 10, 12, 'flameOuter'],
-  [14, 11, 12, 'flameOuter'],
+  [6, 10, 10, 'flameOuter'], [7, 9, 10, 'flameOuter'],
+  [8, 8, 10, 'flameOuter'], [9, 8, 10, 'flameOuter'],
+  [10, 8, 10, 'flameOuter'], [11, 9, 10, 'flameOuter'],
 ];
 const LEFT_FLAME_CORE: readonly Span[] = [
-  [10, 12, 12, 'flameCore'], [11, 11, 12, 'flameCore'],
-  [12, 11, 12, 'flameCore'], [13, 11, 11, 'flameCore'],
+  [8, 10, 10, 'flameCore'], [9, 9, 10, 'flameCore'],
+  [10, 9, 9, 'flameCore'],
 ];
 const UNREAD: readonly Span[] = [
   ...LEFT_FLAME_OUTLINE, ...mirrorSpans(LEFT_FLAME_OUTLINE),
@@ -67,14 +66,14 @@ const UNREAD: readonly Span[] = [
   ...LEFT_FLAME_CORE, ...mirrorSpans(LEFT_FLAME_CORE),
 ];
 const OXIDE: readonly Span[] = [
-  [5, 1, 5, 'oxide'], ...rows(6, 9, 1, 1, 'oxide'),
-  [5, 33, 37, 'oxide'], ...rows(6, 9, 37, 37, 'oxide'),
-  ...rows(22, 25, 1, 1, 'oxide'), [26, 1, 5, 'oxide'],
-  ...rows(22, 25, 37, 37, 'oxide'), [26, 33, 37, 'oxide'],
+  [4, 1, 4, 'oxide'], ...rows(5, 7, 1, 1, 'oxide'),
+  [4, 26, 29, 'oxide'], ...rows(5, 7, 29, 29, 'oxide'),
+  ...rows(17, 20, 1, 1, 'oxide'), [21, 1, 4, 'oxide'],
+  ...rows(17, 20, 29, 29, 'oxide'), [21, 26, 29, 'oxide'],
 ];
 const OFFLINE: readonly Span[] = [
-  ...rows(13, 14, 10, 12, 'face'), ...rows(13, 14, 26, 28, 'face'),
-  [14, 10, 12, 'eye'], [14, 26, 28, 'eye'],
+  ...rows(10, 11, 8, 10, 'face'), ...rows(10, 11, 20, 22, 'face'),
+  [11, 8, 10, 'eye'], [11, 20, 22, 'eye'],
 ];
 
 function color(hex: string): readonly [number, number, number, number] {
