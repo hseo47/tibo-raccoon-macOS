@@ -1,6 +1,6 @@
-# Tibo Raccoon
+# Tibo Raccoon (티보구리)
 
-Tibo Raccoon is an unofficial [SwiftBar](https://swiftbar.app/) plugin that watches Tibo's public [@thsottiaux](https://x.com/thsottiaux) feed and marks posts first observed after its initial baseline as unread. It does not try to decide which posts are Codex-reset hints—the raccoon shows you all of them so you can interpret the nuance yourself.
+Tibo Raccoon is an unofficial [SwiftBar](https://swiftbar.app/) plugin that watches Tibo's public [@thsottiaux](https://x.com/thsottiaux) feed and marks posts first observed after its initial baseline as unread for macOS.
 
 > **Current distribution:** install from source. There is no DMG or one-click installer yet, and the installed plugin uses Bun at runtime.
 
@@ -245,7 +245,3 @@ A native Installer DMG has been designed but not implemented. The current source
 ## License
 
 Tibo Raccoon is available under the [MIT License](LICENSE).
-
-## Disclaimer
-
-Tibo Raccoon is an unofficial community utility. It is not affiliated with or endorsed by Tibo, OpenAI, X, Dayclaw, or SwiftBar, and it is not an official Codex status or reset-notification service.
