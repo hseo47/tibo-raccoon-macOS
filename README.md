@@ -253,10 +253,6 @@ bun run live-check  # Make one read-only request to validate the live feed schem
 
 The current offline suite contains 177 passing tests on the verified development setup described above. There is not yet a public CI workflow or a broader compatibility matrix.
 
-## Packaging status
-
-A native Installer DMG has been designed but not implemented. The current source version uses package and plugin metadata `v0.1.0` and remains the source-installed Bun/SwiftBar plugin documented above. The packaging design is available in [`docs/superpowers/specs/2026-08-30-tibo-raccoon-native-dmg-design.md`](docs/superpowers/specs/2026-08-30-tibo-raccoon-native-dmg-design.md); it is a plan, not a downloadable release.
-
 ## License
 
 Tibo Raccoon is available under the [MIT License](LICENSE).
