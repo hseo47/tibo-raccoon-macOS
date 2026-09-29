@@ -3,6 +3,8 @@
 .worktrees/
 node_modules/
 dist/
+Native/.build/
+Native/.cache/
 coverage/
 *.log
 *.tmp

@@ -16,12 +16,12 @@ import { post } from './helpers/factories';
 import { FakeClock } from './helpers/fake-clock';
 
 const ACCEPTANCE_ROOT_PREFIX = 'tibo-raccoon-acceptance-';
-const CALM_LIGHT_SHA256 = '090ae57eb9ad9abde97c346708d406be92f779c8ca5785adf31fe2e9a5485ff0';
-const CALM_DARK_SHA256 = '1a0eb3a4467a0d7b874b648b02e6bd5ded97764bebd179b17a18da09b5998088';
-const UNREAD_LIGHT_SHA256 = 'e45715ffb73282da58f9bc25f5019e6fba5ae7448e7026657636c08d41868af0';
-const UNREAD_DARK_SHA256 = 'd5f106490ac25d2f731fa1f5c3ac4ebffa423a157662e64005b323c43a7a9443';
-const OFFLINE_LIGHT_SHA256 = 'ab863510c457e6cd346bc264f21accc0b746d4b5be2cd9e7c9403fac4d6a5db6';
-const OFFLINE_DARK_SHA256 = '0fbfe29c39fbfc201fb0841dae5390a52913ce0f73c430265c8a8f5c2725dfa7';
+const CALM_LIGHT_SHA256 = '340a0c4dff1868a3f2352c36e949d6caf5dfd665ff17d179d1b36db83bb579f2';
+const CALM_DARK_SHA256 = 'ef9d4c27e1571744990f3911adda3928018adcd5a7d41add926cd13297687871';
+const UNREAD_LIGHT_SHA256 = '9fbac278750dec3b25d7958dc9c43013a7d399b809879f6b14e5d79053f33dda';
+const UNREAD_DARK_SHA256 = '94d57f7421efd8a3d10dd3b30ef6a31e8f3760b214b523850d33ee9b87ea9ab3';
+const OFFLINE_LIGHT_SHA256 = '82a70e44b5b2b04e08dc8522a23d24bf4c6471c4ba5e409fbd0af4ec4d1d7241';
+const OFFLINE_DARK_SHA256 = '282f1bb4380bac2efe38b510215c8f049fff258bcdd3b9bafcffc5e3b682616e';
 
 type AcceptanceHarness = {
   feed: Post[];
@@ -178,8 +178,6 @@ test('baseline to unread to read to offline preserves the approved contract', as
     const baselineMenu = await app.render();
     expect(baselineMenu).toContain('Tibo Raccoon · 0 unread');
     assertHeaderImages(baselineMenu, CALM_LIGHT_SHA256, CALM_DARK_SHA256);
-    expect(storedPngPixel(headerImages(baselineMenu).light, 17, 17)).toEqual([0x8f, 0xcb, 0xb7, 0xff]);
-    expect(storedPngPixel(headerImages(baselineMenu).light, 18, 20)).toEqual([0x8f, 0xcb, 0xb7, 0xff]);
     expectBaselineRows(baselineMenu);
     const baselineState = await loadState(app.statePaths);
     expect(baselineState.state.knownIds).toEqual(['1', '2', '3', '4', '5']);
@@ -194,8 +192,8 @@ test('baseline to unread to read to offline preserves the approved contract', as
     app.advance(30_001);
     const unreadMenu = await app.render();
     expect(unreadMenu).toContain('Tibo Raccoon · 1 unread');
-    expect(unreadMenu).toContain('│  a nuanced message ｜ bash=/tmp/evil | color=#1F2328,#F4F4F5 size=13');
-    expect(unreadMenu).toContain('│  — — — | color=#1F2328,#F4F4F5 size=13');
+    expect(unreadMenu).toContain('a nuanced message ｜ bash=/tmp/evil | color=#1F2328,#F4F4F5 size=13');
+    expect(unreadMenu).toContain('— — — | color=#1F2328,#F4F4F5 size=13');
     expect(unreadMenu).not.toContain('a nuanced message | bash=/tmp/evil');
     assertHeaderImages(unreadMenu, UNREAD_LIGHT_SHA256, UNREAD_DARK_SHA256);
     expectActionContract(unreadMenu, pluginPathFor(root));
@@ -219,8 +217,8 @@ test('baseline to unread to read to offline preserves the approved contract', as
     app.advance(30_001);
     const mediaMenu = await app.render();
     expect(mediaMenu).toContain('Tibo Raccoon · 1 unread');
-    expect(mediaMenu).toContain('│  New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
-    expect(mediaMenu).toContain('╰─ Read full post on X → | href=https://x.com/thsottiaux/status/7');
+    expect(mediaMenu).toContain('New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
+    expect(mediaMenu).toContain('↗ | href=https://x.com/thsottiaux/status/7');
     expect(mediaMenu.split('\n').slice(1).every((line) => !/(?:^|\s)image=/.test(line))).toBe(true);
     assertHeaderImages(mediaMenu, UNREAD_LIGHT_SHA256, UNREAD_DARK_SHA256);
 
@@ -243,11 +241,11 @@ test('baseline to unread to read to offline preserves the approved contract', as
       const backoffMenu = await app.render();
       expect(fetchCallCount(app)).toBe(fetchesBeforeBackoffRender);
       expect(backoffMenu).toContain('Tibo Raccoon · 1 unread');
-      expect(backoffMenu).toContain('│  New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
+      expect(backoffMenu).toContain('New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
       expect((await loadState(app.statePaths)).state.lastAttemptAt).toBe(failed.state.lastAttemptAt);
     }
     const unreadDuringFailures = await app.render();
-    expect(unreadDuringFailures).toContain('│  New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
+    expect(unreadDuringFailures).toContain('New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
     expect(unreadDuringFailures).toContain('Feed offline · showing cached posts');
     assertHeaderImages(unreadDuringFailures, UNREAD_LIGHT_SHA256, UNREAD_DARK_SHA256);
     expect((await loadState(app.statePaths)).state.consecutiveFailures).toBe(3);
@@ -255,7 +253,7 @@ test('baseline to unread to read to offline preserves the approved contract', as
     expect(await app.action('mark-read')).toEqual({ stdout: '', stderr: '', exitCode: 0 });
     const offlineMenu = await app.render();
     expect(offlineMenu).toContain('Tibo Raccoon · 0 unread');
-    expect(offlineMenu).toContain('│  New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
+    expect(offlineMenu).toContain('New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
     expect(offlineMenu).toContain('Feed offline · showing cached posts');
     assertHeaderImages(offlineMenu, OFFLINE_LIGHT_SHA256, OFFLINE_DARK_SHA256);
 
@@ -323,8 +321,8 @@ test('corrupt state recovery preserves bytes and alerts every current post', asy
 
     const menu = await app.render();
     expect(menu).toContain('Tibo Raccoon · 2 unread');
-    expect(menu).toContain('│  recovery source eleven | color=#1F2328,#F4F4F5 size=13');
-    expect(menu).toContain('│  recovery source ten | color=#1F2328,#F4F4F5 size=13');
+    expect(menu).toContain('recovery source eleven | color=#1F2328,#F4F4F5 size=13');
+    expect(menu).toContain('recovery source ten | color=#1F2328,#F4F4F5 size=13');
     assertHeaderImages(menu, UNREAD_LIGHT_SHA256, UNREAD_DARK_SHA256);
 
     const afterSuccessfulPoll = await loadState(app.statePaths);
@@ -408,15 +406,15 @@ function createFetchBarrier(): FetchBarrier {
 function expectBaselineRows(menu: string): void {
   const lines = menu.split('\n');
   const expected = [
-    ['╭─ Tibo · Aug 25, 2026 at 12:00 AM', '│  post 5'],
-    ['╭─ Tibo · Aug 24, 2026 at 12:00 AM', '│  post 4'],
-    ['╭─ Tibo · Aug 23, 2026 at 12:00 AM', '│  post 3'],
-    ['╭─ Tibo · Aug 22, 2026 at 12:00 AM', '│  post 2'],
-    ['╭─ Tibo · Aug 21, 2026 at 12:00 AM', '│  post 1'],
+    ['Tibo · Aug 25, 12:00 AM ↗', 'post 5'],
+    ['Tibo · Aug 24, 12:00 AM ↗', 'post 4'],
+    ['Tibo · Aug 23, 12:00 AM ↗', 'post 3'],
+    ['Tibo · Aug 22, 12:00 AM ↗', 'post 2'],
+    ['Tibo · Aug 21, 12:00 AM ↗', 'post 1'],
   ] as const;
   const textIndexes: number[] = [];
   for (const [header, text] of expected) {
-    expect(lines.filter((line) => line.startsWith(`${header} | sfimage=quote.bubble.fill`))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith(`${header} | href=https://x.com/thsottiaux/status/`))).toHaveLength(1);
     expect(lines.filter((line) => line.startsWith(`${text} | color=`))).toHaveLength(1);
     textIndexes.push(lines.findIndex((line) => line.startsWith(`${text} | color=`)));
   }
@@ -441,37 +439,6 @@ function assertHeaderImages(menu: string, expectedLightHash: string, expectedDar
 
 function sha256(bytes: Uint8Array): string {
   return new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
-}
-
-function storedPngPixel(png: Uint8Array, x: number, y: number): readonly [number, number, number, number] {
-  expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
-  const chunks = readPngChunks(png);
-  expect(chunks.map(({ name }) => name)).toEqual(['IHDR', 'IDAT', 'IEND']);
-  expect([...chunks[0]!.data]).toEqual([0, 0, 0, 31, 0, 0, 0, 23, 8, 6, 0, 0, 0]);
-  const idat = chunks[1]!.data;
-  expect([idat[0], idat[1]]).toEqual([0x78, 0x01]);
-  expect(idat[2]! & 0b111).toBe(1);
-  const length = idat[3]! | (idat[4]! << 8);
-  expect(length).toBe(23 * (1 + 31 * 4));
-  const payload = idat.subarray(7, 7 + length);
-  const row = y * 125;
-  expect(payload[row]).toBe(0);
-  const offset = row + 1 + x * 4;
-  return [payload[offset]!, payload[offset + 1]!, payload[offset + 2]!, payload[offset + 3]!];
-}
-
-function readPngChunks(png: Uint8Array): Array<{ name: string; data: Uint8Array }> {
-  const chunks: Array<{ name: string; data: Uint8Array }> = [];
-  let offset = 8;
-  while (offset < png.length) {
-    const length = new DataView(png.buffer, png.byteOffset + offset, 4).getUint32(0);
-    const name = new TextDecoder().decode(png.subarray(offset + 4, offset + 8));
-    const data = png.subarray(offset + 8, offset + 8 + length);
-    chunks.push({ name, data });
-    offset += 12 + length;
-  }
-  expect(offset).toBe(png.length);
-  return chunks;
 }
 
 function expectActionContract(menu: string, pluginPath: string): void {

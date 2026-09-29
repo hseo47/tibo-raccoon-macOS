@@ -1,4 +1,4 @@
-export const FEED_URL = 'https://api.dayclaw.com/api/source/public/x/thsottiaux/items' as const;
+export const FEED_URL = 'https://api.fxtwitter.com/2/profile/thsottiaux/statuses?count=100&with_replies=1' as const;
 export const PROFILE_URL = 'https://x.com/thsottiaux' as const;
 
 export type Post = {

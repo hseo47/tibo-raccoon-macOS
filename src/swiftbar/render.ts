@@ -4,10 +4,10 @@ import { quoteSwiftBarPluginPath } from './plugin-path';
 
 const DEFAULT_WRAP_WIDTH = 54;
 const DEFAULT_MINIMUM_POSTS = 5;
-const MAX_PREVIEW_ROWS = 4;
+const MAX_PREVIEW_ROWS = 3;
 const BODY_PARAMETERS = 'color=#1F2328,#F4F4F5 size=13';
-const READ_HEADER_PARAMETERS = 'sfimage=quote.bubble.fill sfcolor=#6F625C,#CFC5BF color=#3B3330,#F2EAE5 size=12';
-const UNREAD_HEADER_PARAMETERS = 'sfimage=quote.bubble.fill sfcolor=#9A4D49,#CC7A74 color=#7B3735,#F1AAA3 size=12';
+const READ_HEADER_PARAMETERS = 'color=#62636B,#CACBD1 size=12';
+const UNREAD_HEADER_PARAMETERS = 'color=#9A4D49,#F1AAA3 size=12';
 
 export function escapeSwiftBarTitle(value: string): string {
   const normalized = value.replace(/\r\n?|[\u2028\u2029]/g, '\n').replace(/\t/g, ' ');
@@ -78,7 +78,7 @@ export function renderSwiftBarMenu(options: {
     `Mark all as read | bash=${quotedPluginPath} param1=mark-read terminal=false refresh=true`,
     `Refresh now | bash=${quotedPluginPath} param1=refresh-now terminal=false refresh=true`,
     `Open Tibo's profile | href=${PROFILE_URL}`,
-    renderStatus(state, notice ?? null),
+    renderStatus(state, notice ?? null, locale, resolvedTimeZone),
   ];
   return lines.join('\n');
 }
@@ -86,18 +86,15 @@ export function renderSwiftBarMenu(options: {
 function renderPostRows(post: Post, unread: boolean, locale: string, timeZone: string): string[] {
   const timestamp = post.publishedAt === null
     ? 'Time unavailable'
-    : new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(new Date(post.publishedAt));
-  const textRows = previewRows(post.text === '' ? ['New media post from Tibo'] : wrapPostText(post.text));
-  const header = unread ? `╭─ Tibo · NEW · ${timestamp}` : `╭─ Tibo · ${timestamp}`;
+    : formatCompactTimestamp(post.publishedAt, locale, timeZone);
+  const wrapped = wrapPostText(post.text).map((row) => row.trim()).filter((row) => row !== '');
+  const textRows = previewRows(wrapped.length === 0 ? ['New media post from Tibo'] : wrapped);
+  const header = `Tibo · ${unread ? 'NEW · ' : ''}${timestamp}${post.url === null ? '' : ' ↗'}`;
   const rows = [
-    `${header} | ${unread ? UNREAD_HEADER_PARAMETERS : READ_HEADER_PARAMETERS}`,
-    ...textRows.map((row) => `│  ${row} | ${BODY_PARAMETERS}`),
+    `${header} | ${post.url === null ? '' : `href=${post.url} `}${unread ? UNREAD_HEADER_PARAMETERS : READ_HEADER_PARAMETERS}`,
+    ...textRows.map((row) => `${row} | ${BODY_PARAMETERS}`),
   ];
-  if (post.url === null) {
-    rows.push('╰─ Full post link unavailable');
-  } else {
-    rows.push(`╰─ Read full post on X → | href=${post.url}`);
-  }
+  if (post.url === null) rows.push('Full post link unavailable');
   return rows;
 }
 
@@ -112,16 +109,19 @@ function previewRows(rows: string[]): string[] {
   return preview;
 }
 
-function renderStatus(state: RaccoonState, notice: RuntimeNotice): string {
+function renderStatus(state: RaccoonState, notice: RuntimeNotice, locale: string, timeZone: string): string {
   if (notice === 'state') return 'Local state unavailable · cached status may be incomplete';
   if (state.consecutiveFailures >= 3) return 'Feed offline · showing cached posts';
   if (state.consecutiveFailures > 0) return 'Feed unavailable · showing cached posts';
   if (state.lastSuccessAt === null) return 'Waiting for first successful refresh';
-  return `Last successful refresh · ${formatLocalTimestamp(state.lastSuccessAt)}`;
+  return `Updated ${formatCompactTimestamp(state.lastSuccessAt, locale, timeZone)}`;
 }
 
-function formatLocalTimestamp(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+function formatCompactTimestamp(value: string, locale: string, timeZone: string): string {
+  const date = new Date(value);
+  const day = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', timeZone }).format(date);
+  const time = new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit', timeZone }).format(date);
+  return `${day}, ${time}`;
 }
 
 function comparePostsNewestFirst(left: Post, right: Post): number {

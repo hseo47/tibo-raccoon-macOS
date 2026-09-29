@@ -77,6 +77,33 @@ test('renders an image-only paired Base64 header and unread dropdown count', () 
   expect(count).toBe('Tibo Raccoon · 1 unread');
 });
 
+test('compact post header opens the post without a repeated link row or box drawing', () => {
+  const menu = renderSwiftBarMenu({
+    state: stateWith({ cachedPosts: [post('1', { text: 'Hi,\n\nTomorrow is DevDay.', publishedAt: '2026-09-29T07:39:00.000Z' })] }),
+    pluginPath,
+    locale: 'en-US',
+    timeZone: 'UTC',
+  });
+  expect(menu).toContain('Tibo · Sep 29, 7:39 AM ↗ | href=https://x.com/thsottiaux/status/1');
+  expect(menu).toContain('Hi, | color=#1F2328,#F4F4F5 size=13');
+  expect(menu).toContain('Tomorrow is DevDay. | color=#1F2328,#F4F4F5 size=13');
+  expect(menu).not.toContain('Read full post on X');
+  expect(menu).not.toMatch(/[╭│╰]/u);
+});
+
+test('compact previews omit blank lines and wrapped edge spaces', () => {
+  const menu = renderSwiftBarMenu({
+    state: stateWith({ cachedPosts: [post('spaces', { text: `${'a'.repeat(54)} next\n\n Done` })] }),
+    pluginPath,
+  });
+  const body = menu.split('\n').filter((row) => row.endsWith(' | color=#1F2328,#F4F4F5 size=13'));
+  expect(body).toEqual([
+    `${'a'.repeat(54)} | color=#1F2328,#F4F4F5 size=13`,
+    'next | color=#1F2328,#F4F4F5 size=13',
+    'Done | color=#1F2328,#F4F4F5 size=13',
+  ]);
+});
+
 test('selects newest posts, all unread posts, and enough reads to reach five without mutation', () => {
   const source = [
     post('old-read', { publishedAt: '2026-08-20T00:00:00.000Z' }),
@@ -113,14 +140,14 @@ test('uses descending UTF-16 opaque IDs for equal and unavailable timestamp ties
   expect(selectMenuPosts(state).map(({ id }) => id)).toEqual(['\uE000', '\u{10000}', '\u00e4', 'z']);
 });
 
-test('uses exact media and unavailable-link thought-bubble fallbacks', () => {
+test('uses exact media and unavailable-link fallbacks', () => {
   const menu = renderSwiftBarMenu({
     state: stateWith({ cachedPosts: [post('media', { text: '', publishedAt: null, url: null })] }),
     pluginPath,
   });
-  expect(menu).toContain('│  New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
-  expect(menu).toContain('╰─ Full post link unavailable');
-  expect(menu).not.toContain('╰─ Full post link unavailable | href=');
+  expect(menu).toContain('New media post from Tibo | color=#1F2328,#F4F4F5 size=13');
+  expect(menu).toContain('Full post link unavailable');
+  expect(menu).not.toContain('Full post link unavailable | href=');
 });
 
 test('wraps full multiline Unicode text at 54 code points without splitting code points', () => {
@@ -130,7 +157,7 @@ test('wraps full multiline Unicode text at 54 code points without splitting code
   expect(rows.join('')).toBe(value.replace('\n', ''));
 });
 
-test('renders at most four 54-code-point preview rows with one Unicode-safe ellipsis', () => {
+test('renders at most three 54-code-point preview rows with one Unicode-safe ellipsis', () => {
   const value = `${'😀'.repeat(54)}${'漢'.repeat(54)}${'a'.repeat(54)}${'🦝'.repeat(54)}tail`;
   const menu = renderSwiftBarMenu({
     state: stateWith({ cachedPosts: [post('long', { text: value })] }),
@@ -138,29 +165,27 @@ test('renders at most four 54-code-point preview rows with one Unicode-safe elli
     locale: 'en-US',
     timeZone: 'UTC',
   });
-  const bodyRows = menu.split('\n').filter((row) => row.startsWith('│  '));
+  const bodyRows = menu.split('\n').filter((row) => row.endsWith(' | color=#1F2328,#F4F4F5 size=13'));
 
   expect(bodyRows).toEqual([
-    `│  ${'😀'.repeat(54)} | color=#1F2328,#F4F4F5 size=13`,
-    `│  ${'漢'.repeat(54)} | color=#1F2328,#F4F4F5 size=13`,
-    `│  ${'a'.repeat(54)} | color=#1F2328,#F4F4F5 size=13`,
-    `│  ${'🦝'.repeat(53)}… | color=#1F2328,#F4F4F5 size=13`,
+    `${'😀'.repeat(54)} | color=#1F2328,#F4F4F5 size=13`,
+    `${'漢'.repeat(54)} | color=#1F2328,#F4F4F5 size=13`,
+    `${'a'.repeat(53)}… | color=#1F2328,#F4F4F5 size=13`,
   ]);
   expect(bodyRows.every((row) => !row.includes('md=true') && !row.includes('length='))).toBe(true);
   expect(menu).not.toContain('tail');
 });
 
-test('adds an ellipsis to a short fourth logical row when later rows are omitted', () => {
+test('adds an ellipsis to a short third logical row when later rows are omitted', () => {
   const menu = renderSwiftBarMenu({
     state: stateWith({ cachedPosts: [post('lines', { text: 'one\ntwo\nthree\nfour\nfive' })] }),
     pluginPath,
   });
 
-  expect(menu.split('\n').filter((row) => row.startsWith('│  '))).toEqual([
-    '│  one | color=#1F2328,#F4F4F5 size=13',
-    '│  two | color=#1F2328,#F4F4F5 size=13',
-    '│  three | color=#1F2328,#F4F4F5 size=13',
-    '│  four… | color=#1F2328,#F4F4F5 size=13',
+  expect(menu.split('\n').filter((row) => row.endsWith(' | color=#1F2328,#F4F4F5 size=13'))).toEqual([
+    'one | color=#1F2328,#F4F4F5 size=13',
+    'two | color=#1F2328,#F4F4F5 size=13',
+    'three… | color=#1F2328,#F4F4F5 size=13',
   ]);
 });
 
@@ -175,7 +200,7 @@ test('neutralizes pipes, controls, CRLF, separators, and parameter-looking title
   expect(menu.split('\n').filter((row) => row === '---')).toHaveLength(2);
   expect(menu).toContain('hello ｜ bash=/tmp/evil');
   expect(menu).not.toContain('bash=/tmp/evil param1=oops');
-  const remoteRows = menu.split('\n').filter((row) => row.startsWith('│  '));
+  const remoteRows = menu.split('\n').filter((row) => row.endsWith(' | color=#1F2328,#F4F4F5 size=13'));
   expect(remoteRows.map(parseSwiftBarParameters)).toEqual([
     { color: '#1F2328,#F4F4F5', size: '13' },
     { color: '#1F2328,#F4F4F5', size: '13' },
@@ -191,18 +216,18 @@ test('Unicode line and paragraph separators cannot create unowned SwiftBar rows'
     });
     const lines = splitSwiftBarLines(menu);
     expect(lines.filter((line) => line === '---')).toHaveLength(2);
-    expect(lines).toContain('│  safe | color=#1F2328,#F4F4F5 size=13');
-    expect(lines).toContain('│  — — — | color=#1F2328,#F4F4F5 size=13');
-    expect(lines).toContain('│  tail | color=#1F2328,#F4F4F5 size=13');
+    expect(lines).toContain('safe | color=#1F2328,#F4F4F5 size=13');
+    expect(lines).toContain('— — — | color=#1F2328,#F4F4F5 size=13');
+    expect(lines).toContain('tail | color=#1F2328,#F4F4F5 size=13');
     expect(lines.filter((line) => line.includes('safe') || line.includes('tail') || line.includes('— — —'))).toEqual([
-      '│  safe | color=#1F2328,#F4F4F5 size=13',
-      '│  — — — | color=#1F2328,#F4F4F5 size=13',
-      '│  tail | color=#1F2328,#F4F4F5 size=13',
+      'safe | color=#1F2328,#F4F4F5 size=13',
+      '— — — | color=#1F2328,#F4F4F5 size=13',
+      'tail | color=#1F2328,#F4F4F5 size=13',
     ]);
   }
 });
 
-test('places one trusted separator between post thought-bubble groups', () => {
+test('places one trusted separator between post groups', () => {
   const menu = renderSwiftBarMenu({
     state: stateWith({
       cachedPosts: [
@@ -216,10 +241,10 @@ test('places one trusted separator between post thought-bubble groups', () => {
 
   expect(lines.filter((row) => row === '---')).toHaveLength(3);
   expect(lines.filter((row) => row.includes('— — —'))).toEqual([
-    '│  — — — | color=#1F2328,#F4F4F5 size=13',
-    '│  — — — | color=#1F2328,#F4F4F5 size=13',
+    '— — — | color=#1F2328,#F4F4F5 size=13',
+    '— — — | color=#1F2328,#F4F4F5 size=13',
   ]);
-  expect(lines.indexOf('╰─ Read full post on X → | href=https://x.com/thsottiaux/status/newer') + 1)
+  expect(lines.indexOf('— — — | color=#1F2328,#F4F4F5 size=13') + 1)
     .toBe(lines.indexOf('---', 2));
 });
 
@@ -257,8 +282,7 @@ test('formats post times with the injected locale and time zone', () => {
     timeZone: 'America/Los_Angeles',
   });
   expect(menu).toContain(
-    '╭─ Tibo · Aug 28, 2026 at 5:00 PM | sfimage=quote.bubble.fill '
-      + 'sfcolor=#6F625C,#CFC5BF color=#3B3330,#F2EAE5 size=12',
+    'Tibo · Aug 28, 5:00 PM ↗ | href=https://x.com/thsottiaux/status/time color=#62636B,#CACBD1 size=12',
   );
 });
 
@@ -275,13 +299,11 @@ test('uses the trusted oxide accent and NEW label only for unread post headers',
     locale: 'en-US',
     timeZone: 'UTC',
   });
-  const postHeaders = menu.split('\n').filter((row) => row.startsWith('╭─ Tibo'));
+  const postHeaders = menu.split('\n').filter((row) => row.startsWith('Tibo · '));
 
   expect(postHeaders).toEqual([
-    '╭─ Tibo · NEW · Aug 29, 2026 at 12:00 AM | sfimage=quote.bubble.fill '
-      + 'sfcolor=#9A4D49,#CC7A74 color=#7B3735,#F1AAA3 size=12',
-    '╭─ Tibo · Aug 28, 2026 at 12:00 AM | sfimage=quote.bubble.fill '
-      + 'sfcolor=#6F625C,#CFC5BF color=#3B3330,#F2EAE5 size=12',
+    'Tibo · NEW · Aug 29, 12:00 AM ↗ | href=https://x.com/thsottiaux/status/unread color=#9A4D49,#F1AAA3 size=12',
+    'Tibo · Aug 28, 12:00 AM ↗ | href=https://x.com/thsottiaux/status/read color=#62636B,#CACBD1 size=12',
   ]);
 });
 
@@ -301,22 +323,17 @@ test('renders the complete ordered menu with trusted actions and successful-refr
     lastSuccessAt: '2026-08-29T12:34:00.000Z',
   });
   const menu = renderSwiftBarMenu({ state, pluginPath, locale: 'en-US', timeZone: 'UTC' });
-  const localSuccessTimestamp = new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date('2026-08-29T12:34:00.000Z'));
   expect(menu.split('\n')).toEqual([
     `| image=${ICON_BASE64.calm.light},${ICON_BASE64.calm.dark} dropdown=false`,
     '---',
     'Tibo Raccoon · 0 unread',
-    '╭─ Tibo · Aug 29, 2026 at 12:00 AM | sfimage=quote.bubble.fill sfcolor=#6F625C,#CFC5BF color=#3B3330,#F2EAE5 size=12',
-    '│  first post | color=#1F2328,#F4F4F5 size=13',
-    '╰─ Read full post on X → | href=https://x.com/thsottiaux/status/post-1',
+    'Tibo · Aug 29, 12:00 AM ↗ | href=https://x.com/thsottiaux/status/post-1 color=#62636B,#CACBD1 size=12',
+    'first post | color=#1F2328,#F4F4F5 size=13',
     '---',
     "Mark all as read | bash='/tmp/Tibo Raccoon/tibo-raccoon.2m.js' param1=mark-read terminal=false refresh=true",
     "Refresh now | bash='/tmp/Tibo Raccoon/tibo-raccoon.2m.js' param1=refresh-now terminal=false refresh=true",
     "Open Tibo's profile | href=https://x.com/thsottiaux",
-    `Last successful refresh · ${localSuccessTimestamp}`,
+    'Updated Aug 29, 12:34 PM',
   ]);
   const lines = menu.split('\n');
   expect(lines.filter((line) => line.includes('bash='))).toEqual([

@@ -1,7 +1,6 @@
 import { mkdir } from 'node:fs/promises';
+import sharp from 'sharp';
 import type { Appearance, IconState } from '../src/domain';
-import { HEIGHT, renderRaccoonRgba, WIDTH } from '../src/artwork/grid';
-import { encodeDeterministicPng } from '../src/artwork/png';
 
 const states = ['calm', 'unread', 'offline'] as const satisfies readonly IconState[];
 const appearances = ['light', 'dark'] as const satisfies readonly Appearance[];
@@ -16,8 +15,18 @@ await mkdir('src/generated', { recursive: true });
 for (const state of states) {
   base64ByState[state] = {} as Record<Appearance, string>;
   hashByState[state] = {} as Record<Appearance, string>;
+  const source = await Bun.file(`previews/v2-raccoon/${state}.svg`).text();
   for (const appearance of appearances) {
-    const png = encodeDeterministicPng(renderRaccoonRgba(state, appearance), WIDTH, HEIGHT);
+    const svg = appearance === 'dark' ? source : source
+      .replaceAll('#34383b', '#33383c')
+      .replaceAll('#c9eee4', '#bde4d8')
+      .replaceAll('#fa936d', '#dc7056')
+      .replaceAll('#ffe4aa', '#ffdc93');
+    const png = await sharp(Buffer.from(svg), { density: 384 })
+      .resize(31, 23, { fit: 'fill', kernel: 'lanczos3' })
+      .withMetadata({ density: 96 })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
     const filename = `${state}-${appearance}.png`;
     const hash = new Bun.CryptoHasher('sha256').update(png).digest('hex');
     base64ByState[state][appearance] = Buffer.from(png).toString('base64');

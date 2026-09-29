@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { runCli, type CliDependencies, type CliResult } from './cli';
 import type { Clock } from './domain';
-import { fetchDayclawPosts } from './feed/client';
+import { fetchFxPosts } from './feed/client';
 import { poll } from './poll';
 import { defaultStatePaths, loadState, mutateState, type StatePaths } from './state/store';
 import { renderSwiftBarMenu } from './swiftbar/render';
@@ -112,7 +112,7 @@ export function createProductionDependencies(options: {
       clock,
       loadState: () => loadState(paths),
       mutateState: mutate,
-      fetchPosts: () => fetchDayclawPosts(),
+      fetchPosts: (since) => fetchFxPosts({ since }),
     }),
     mutateState: mutate,
     render: (state, notice) => renderSwiftBarMenu({ state, notice, pluginPath }),

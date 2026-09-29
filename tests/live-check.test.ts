@@ -57,7 +57,7 @@ test('live-check CLI escapes a malicious newest remote ID', async () => {
     run: async () => ({ count: 1, newestId: 'remote\n\u001b[2J\u2028' }),
     writer: { stdout: { write: (value: string) => { stdout += value; } }, stderr: { write: (value: string) => { stderr += value; } }, process },
   });
-  expect(stdout).toBe('Dayclaw schema valid: 1 posts; newest ID: remote\\n\\u001b[2J\\u2028\n');
+  expect(stdout).toBe('FxTwitter feed valid: 1 posts; newest ID: remote\\n\\u001b[2J\\u2028\n');
   expect(stderr).toBe('');
   expect(process.exitCode).toBe(0);
 });

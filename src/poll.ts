@@ -11,7 +11,7 @@ export type PollDependencies = {
   clock: Clock;
   loadState(): Promise<StateLoad>;
   mutateState(mutation: (state: RaccoonState) => RaccoonState): Promise<RaccoonState>;
-  fetchPosts(): Promise<Post[]>;
+  fetchPosts(since: string | null): Promise<Post[]>;
 };
 
 export type PollResult = {
@@ -37,7 +37,9 @@ export async function poll(mode: PollMode, dependencies: PollDependencies): Prom
   let posts: Post[] | undefined;
   let failureKind: FeedError['kind'] | undefined;
   try {
-    posts = await dependencies.fetchPosts();
+    const newestCached = cached.cachedPosts.reduce<string | null>((latest, item) =>
+      item.publishedAt !== null && (latest === null || item.publishedAt > latest) ? item.publishedAt : latest, null);
+    posts = await dependencies.fetchPosts(newestCached);
   } catch (error) {
     failureKind = error instanceof FeedError ? error.kind : 'network';
   }

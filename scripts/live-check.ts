@@ -1,10 +1,10 @@
-import { fetchDayclawPosts } from '../src/feed/client';
+import { fetchFxPosts } from '../src/feed/client';
 import { printableOneLine } from './cli-output';
 
 export async function runLiveCheck(options: {
-  fetchPosts?: typeof fetchDayclawPosts;
+  fetchPosts?: typeof fetchFxPosts;
 } = {}): Promise<{ count: number; newestId: string | null }> {
-  const posts = await (options.fetchPosts ?? fetchDayclawPosts)();
+  const posts = await (options.fetchPosts ?? fetchFxPosts)();
   return { count: posts.length, newestId: posts[0]?.id ?? null };
 }
 
@@ -18,7 +18,7 @@ export type LiveCheckCliIo = {
 export async function runLiveCheckCli(io: LiveCheckCliIo): Promise<void> {
   try {
     const result = await (io.run ?? runLiveCheck)();
-    io.writer.stdout.write(`Dayclaw schema valid: ${result.count} posts; newest ID: ${printableOneLine(result.newestId ?? 'none')}\n`);
+    io.writer.stdout.write(`FxTwitter feed valid: ${result.count} posts; newest ID: ${printableOneLine(result.newestId ?? 'none')}\n`);
     io.writer.process.exitCode = 0;
   } catch {
     io.writer.stderr.write('Live check failed\n');

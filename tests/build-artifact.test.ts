@@ -11,16 +11,16 @@ type Appearance = 'light' | 'dark';
 
 const EXPECTED_ICON_SHA256 = {
   calm: {
-    light: '090ae57eb9ad9abde97c346708d406be92f779c8ca5785adf31fe2e9a5485ff0',
-    dark: '1a0eb3a4467a0d7b874b648b02e6bd5ded97764bebd179b17a18da09b5998088',
+    light: '340a0c4dff1868a3f2352c36e949d6caf5dfd665ff17d179d1b36db83bb579f2',
+    dark: 'ef9d4c27e1571744990f3911adda3928018adcd5a7d41add926cd13297687871',
   },
   unread: {
-    light: 'e45715ffb73282da58f9bc25f5019e6fba5ae7448e7026657636c08d41868af0',
-    dark: 'd5f106490ac25d2f731fa1f5c3ac4ebffa423a157662e64005b323c43a7a9443',
+    light: '9fbac278750dec3b25d7958dc9c43013a7d399b809879f6b14e5d79053f33dda',
+    dark: '94d57f7421efd8a3d10dd3b30ef6a31e8f3760b214b523850d33ee9b87ea9ab3',
   },
   offline: {
-    light: 'ab863510c457e6cd346bc264f21accc0b746d4b5be2cd9e7c9403fac4d6a5db6',
-    dark: '0fbfe29c39fbfc201fb0841dae5390a52913ce0f73c430265c8a8f5c2725dfa7',
+    light: '82a70e44b5b2b04e08dc8522a23d24bf4c6471c4ba5e409fbd0af4ec4d1d7241',
+    dark: '282f1bb4380bac2efe38b510215c8f049fff258bcdd3b9bafcffc5e3b682616e',
   },
 } as const satisfies Record<IconState, Record<Appearance, string>>;
 
